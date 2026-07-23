@@ -49,6 +49,8 @@ opkg install luci-app-nordvpn_1.0.0-1_all.ipk
 
 The postinst enables and starts both services and clears the LuCI cache.
 
+**Note**: use the 24.10.x SDK for opkg-based systems (produces `.ipk`). OpenWrt 25.x switched to apk — building with the 25.12 SDK works too and produces an `.apk` instead.
+
 ### Manually
 
 ```bash

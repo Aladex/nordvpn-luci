@@ -13,10 +13,6 @@ LUCI_PKGARCH:=all
 define Package/$(PKG_NAME)/postinst
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] || {
-	/etc/init.d/nordvpn-cache enable
-	/etc/init.d/nordvpn-cache start
-	/etc/init.d/nordvpn-rotate enable
-	/etc/init.d/nordvpn-rotate start
 	rm -rf /tmp/luci-*
 }
 endef

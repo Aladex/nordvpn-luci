@@ -1,0 +1,61 @@
+name: Build package
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  OPENWRT_VERSION: "24.10.7"
+  SDK_DIR: "openwrt-sdk-24.10.7-x86-64_gcc-13.3.0_musl.Linux-x86_64"
+  SDK_URL: "https://downloads.openwrt.org/releases/24.10.7/targets/x86/64/openwrt-sdk-24.10.7-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache OpenWrt SDK
+        id: sdk-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.SDK_DIR }}
+          key: ${{ env.SDK_DIR }}
+
+      - name: Download and extract SDK
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zstd
+          curl -fSL -o sdk.tar.zst "$SDK_URL"
+          tar -I zstd -xf sdk.tar.zst
+          rm sdk.tar.zst
+
+      - name: Install build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gawk gettext libncurses-dev rsync unzip zlib1g-dev
+
+      - name: Build luci-app-nordvpn
+        run: |
+          cd "$SDK_DIR"
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          mkdir -p package/luci-app-nordvpn
+          cp -r "$GITHUB_WORKSPACE"/Makefile "$GITHUB_WORKSPACE"/luasrc "$GITHUB_WORKSPACE"/root package/luci-app-nordvpn/
+          make defconfig
+          make package/luci-app-nordvpn/compile V=s
+
+      - name: Upload ipk artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-app-nordvpn-ipk
+          path: ${{ env.SDK_DIR }}/bin/packages/*/luci_app_nordvpn/luci-app-nordvpn_*.ipk
+
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.SDK_DIR }}/bin/packages/*/luci_app_nordvpn/luci-app-nordvpn_*.ipk

@@ -3,7 +3,7 @@ include $(TOPDIR)/rules.mk
 PKG_NAME:=luci-app-nordvpn
 PKG_VERSION:=1.0.0
 PKG_RELEASE:=1
-PKG_LICENSE:=MIT
+PKG_LICENSE:=0BSD
 
 LUCI_TITLE:=LuCI support for NordVPN WireGuard
 LUCI_DESCRIPTION:=Web interface for configuring NordVPN WireGuard with automatic server rotation and custom routing tables

@@ -1,0 +1,339 @@
+#!/usr/bin/lua
+
+-- NordVPN Rotation Script
+-- Automatically rotates to a random server based on saved configuration
+
+local uci = require("luci.model.uci").cursor()
+local json = require("luci.jsonc")
+local sys = require("luci.sys")
+local math = require("math")
+
+local API_BASE = "https://api.nordvpn.com/v1"
+local SERVERS_URL = API_BASE .. "/servers"
+local DEFAULT_PORT = 51820
+local PAGE_SIZE = 250
+local DEFAULT_HOP_MODE = "single"
+local PING_TARGET = "8.8.8.8"
+local PING_COUNT = 10
+local PING_TIMEOUT = 2
+local MAX_SERVER_RETRIES = 10
+local WAIT_AFTER_CONNECT = 3
+
+-- Seed RNG once per run (use coarse ms from os.clock if available)
+local function seed_rng()
+	local clock_part = tostring(os.clock() or ""):gsub("%D", "")
+	clock_part = tonumber(clock_part) or 0
+	math.randomseed(os.time() + clock_part)
+end
+
+seed_rng()
+
+local iface_name = arg[1] or "nordvpn"
+
+local function build_query_url(base_url, params)
+	local query_parts = {}
+	for k, v in pairs(params) do
+		table.insert(query_parts, k .. "=" .. v)
+	end
+	return base_url .. (#query_parts > 0 and "?" .. table.concat(query_parts, "&") or "")
+end
+
+local function fetch_servers_page(offset, limit)
+	local params = {
+		limit = tostring(limit or PAGE_SIZE),
+		offset = tostring(offset or 0),
+		["filters[servers_technologies][identifier]"] = "wireguard_udp"
+	}
+	local url = build_query_url(SERVERS_URL, params)
+	local body = sys.httpget(url)
+	if not body or #body == 0 then
+		return nil, "failed to fetch server list (httpget returned empty)"
+	end
+
+	local data = json.parse(body)
+	if not data or type(data) ~= "table" then
+		return nil, "failed to parse server data"
+	end
+
+	return data
+end
+
+local function extract_public_key(server)
+	local public_key = nil
+	local technologies = server.technologies or {}
+	for _, tech in ipairs(technologies) do
+		if tech.identifier == "wireguard_udp" then
+			local metadata = tech.metadata or {}
+			for _, meta in ipairs(metadata) do
+				if meta.name == "public_key" then
+					public_key = meta.value
+					break
+				end
+			end
+			break
+		end
+	end
+	return public_key
+end
+
+local function is_multihop(server)
+	local hostname = (server.hostname or ""):lower()
+	local name = (server.name or ""):lower()
+
+	-- Hostname like cc1-cc2##.nordvpn.com
+	local entry_code, exit_code = hostname:match("^([a-z][a-z])%-([a-z][a-z])%d+%.nordvpn%.com$")
+	if entry_code and exit_code and entry_code ~= exit_code then
+		return true
+	end
+
+	-- Name like "CountryA - CountryB #"
+	local a, b = name:match("^%s*([%w%s]+)%s*%-%s*([%w%s]+)%s*#")
+	if a and b and a ~= b then
+		return true
+	end
+
+	return false
+end
+
+local function select_random_server(country_code, city_code, hop_mode)
+	country_code = string.lower(country_code)
+	local offset = 0
+	local matches = 0
+	local chosen = nil
+	local want_multi = hop_mode == "multihop"
+	local candidates = {}
+
+	while true do
+		local page, err = fetch_servers_page(offset, PAGE_SIZE)
+		if not page then
+			return nil, err
+		end
+
+		if #page == 0 then
+			break
+		end
+
+		for _, server in ipairs(page) do
+			local pk = extract_public_key(server)
+			if pk then
+				local is_multi = is_multihop(server)
+				if (want_multi and is_multi) or ((not want_multi) and (not is_multi)) then
+					if server.locations and #server.locations > 0 then
+						local loc = server.locations[1]
+						local c_info = loc.country
+						if c_info and string.lower(c_info.code or "") == country_code then
+							local match = true
+							if city_code and city_code ~= "" then
+								local c_city = c_info.city and c_info.city.name or ""
+								local server_city_code = country_code .. "-" .. c_city:lower():gsub("[^a-z0-9]", "")
+								if server_city_code ~= city_code then
+									match = false
+								end
+							end
+							if match then
+								local city_name = c_info.city and c_info.city.name or "unknown"
+								local city_slug = city_name:lower():gsub("[^a-z0-9]", "")
+								local loc_code = country_code .. "-" .. city_slug
+								matches = matches + 1
+								-- Reservoir sampling keeps memory O(1) while preserving uniform randomness.
+								if math.random(matches) == 1 then
+									chosen = {
+										public_key = pk,
+										endpoint_host = server.hostname,
+										hostname = server.hostname,
+										port = DEFAULT_PORT,
+										location = loc_code,
+										name = server.name or ""
+									}
+								end
+								-- Keep a list of candidates for debug output (hostnames and names)
+								table.insert(candidates, string.format("%s (%s, load %s%%)", server.name or server.hostname or "unknown", server.hostname or "-", server.load or "0"))
+							end
+						end
+					end
+				end
+			end
+		end
+
+		if #page < PAGE_SIZE then
+			break
+		end
+
+		offset = offset + PAGE_SIZE
+	end
+
+	if not chosen then
+		return nil, "no suitable servers found"
+	end
+
+	return chosen, candidates
+end
+
+local function test_connectivity(iface_name, ping_count, ping_timeout)
+	ping_count = ping_count or PING_COUNT
+	ping_timeout = ping_timeout or PING_TIMEOUT
+
+	-- Wait a bit for the connection to stabilize
+	os.execute(string.format("sleep %d", WAIT_AFTER_CONNECT))
+
+	local success_count = 0
+	local fail_count = 0
+
+	print(string.format("Testing connectivity with %d pings to %s...", ping_count, PING_TARGET))
+
+	for i = 1, ping_count do
+		local cmd = string.format("ping -c 1 -W %d %s >/dev/null 2>&1", ping_timeout, PING_TARGET)
+		local ret = os.execute(cmd)
+
+		-- In Lua 5.1 (OpenWrt), os.execute returns exit code directly
+		-- In Lua 5.2+, it returns true/false, exit type, exit code
+		local is_success = false
+		if type(ret) == "number" then
+			is_success = (ret == 0)
+		else
+			is_success = ret
+		end
+
+		if is_success then
+			success_count = success_count + 1
+			io.write(".")
+			io.flush()
+		else
+			fail_count = fail_count + 1
+			io.write("x")
+			io.flush()
+		end
+	end
+
+	print("")
+	print(string.format("Ping results: %d/%d successful", success_count, ping_count))
+
+	-- Consider connection working if at least 70% of pings succeed
+	local success_rate = success_count / ping_count
+	return success_rate >= 0.7, success_count, fail_count
+end
+
+local function update_peer(iface_name, server)
+	local peer_section = nil
+	uci:foreach("network", nil, function(s)
+		if s[".type"] and s[".type"]:match("^wireguard_") and s.interface == iface_name then
+			peer_section = s[".name"]
+			return false
+		end
+	end)
+
+	if not peer_section then
+		return false, "peer section not found"
+	end
+
+	uci:set("network", peer_section, "public_key", server.public_key)
+	uci:set("network", peer_section, "endpoint_host", server.endpoint_host)
+	uci:set("network", peer_section, "endpoint_port", tostring(server.port))
+	uci:set("network", peer_section, "nordvpn_gateway", server.hostname)
+
+	-- Update location in interface
+	uci:set("network", iface_name, "nordvpn_location", server.location)
+	uci:set("network", iface_name, "nordvpn_last_applied", os.date("!%Y-%m-%dT%H:%M:%SZ"))
+
+	uci:save("network")
+	uci:commit("network")
+
+	-- Restart interface
+	os.execute(string.format("/sbin/ifup %s >/dev/null 2>&1", iface_name))
+
+	return true
+end
+
+local function main()
+	-- Check if rotation is enabled
+	local rotation_enabled = uci:get("network", iface_name, "nordvpn_rotation_enabled")
+	if rotation_enabled ~= "1" then
+		print("Rotation disabled for interface: " .. iface_name)
+		os.exit(0)
+	end
+
+	-- Get country and city codes
+	local country_code = uci:get("network", iface_name, "nordvpn_country_code")
+	if not country_code or country_code == "" then
+		print("Error: No country code configured")
+		os.exit(1)
+	end
+
+	local city_code = uci:get("network", iface_name, "nordvpn_city_code") or ""
+	local hop_mode = uci:get("network", iface_name, "nordvpn_hop_mode") or DEFAULT_HOP_MODE
+
+	-- Check if a fixed server is configured
+	local fixed_server = uci:get("network", iface_name, "nordvpn_fixed_server")
+	if fixed_server == "1" then
+		print("Fixed server is configured - rotation should be disabled. Exiting.")
+		os.exit(0)
+	end
+
+	-- Get connectivity test settings (optional, with defaults)
+	local ping_count = tonumber(uci:get("network", iface_name, "nordvpn_ping_count")) or PING_COUNT
+	local ping_timeout = tonumber(uci:get("network", iface_name, "nordvpn_ping_timeout")) or PING_TIMEOUT
+	local max_retries = tonumber(uci:get("network", iface_name, "nordvpn_max_retries")) or MAX_SERVER_RETRIES
+
+	-- Fetch server data (paginated)
+	print(string.format("Rotating VPN for interface %s (country: %s, city: %s)",
+		iface_name, country_code, city_code))
+	print(string.format("Connectivity test: %d pings with %ds timeout, max %d server attempts",
+		ping_count, ping_timeout, max_retries))
+
+	local candidates = nil
+	local attempt = 0
+
+	while attempt < max_retries do
+		attempt = attempt + 1
+		print(string.format("\n=== Attempt %d/%d ===", attempt, max_retries))
+
+		local server, server_candidates = select_random_server(country_code, city_code, hop_mode)
+		if not server then
+			print("Error selecting server: no suitable servers found")
+			os.exit(1)
+		end
+
+		-- Store candidates list from first attempt for display
+		if attempt == 1 then
+			candidates = server_candidates
+		end
+
+		print(string.format("Selected server: %s (%s)", server.name, server.endpoint_host))
+
+		-- Update configuration and connect
+		local success, err = update_peer(iface_name, server)
+		if success then
+			-- Test connectivity
+			local is_working, success_count, fail_count = test_connectivity(iface_name, ping_count, ping_timeout)
+			if is_working then
+				print(string.format("\nConnection is working! Successfully connected to %s", server.endpoint_host))
+				if candidates and #candidates > 0 then
+					local max_show = 40
+					local list = {}
+					for i, v in ipairs(candidates) do
+						if i > max_show then
+							table.insert(list, string.format("...and %d more", #candidates - max_show))
+							break
+						end
+						table.insert(list, v)
+					end
+					print(string.format("Total candidates found: %d", #candidates))
+				end
+				print("VPN rotated successfully!")
+				os.exit(0)
+			else
+				print(string.format("Connection failed (only %d/%d pings succeeded). Trying another server...",
+					success_count, ping_count))
+			end
+		else
+			print("Error updating configuration: " .. (err or "unknown"))
+			print("Trying another server...")
+		end
+	end
+
+	-- If we get here, all attempts failed
+	print(string.format("\nFailed to find working server after %d attempts.", max_retries))
+	os.exit(1)
+end
+
+main()

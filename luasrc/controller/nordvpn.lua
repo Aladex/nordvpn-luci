@@ -228,7 +228,7 @@ function list_locations()
 		end
 
 		-- Cache miss - return error asking user to wait for background update
-		-- The background job (nordvpn-cache-update cron) will populate the cache
+		-- The background job (nordvpn-cache service) will populate the cache
 		prepare_json_response({
 			error = "Server list not available yet",
 			message = "The server list is being loaded in the background. Please wait and refresh.",
@@ -737,38 +737,8 @@ function apply_profile()
 	cur:save("network")
 	cur:commit("network")
 
-	-- Manage cron for rotation
-	if payload.rotation_enabled then
-		local rotation_mode = payload.rotation_mode or "interval"
-		local cron_line
-
-		if rotation_mode == "interval" and payload.rotation_interval then
-			local interval = tonumber(payload.rotation_interval) or 360
-			-- Interval is in minutes; cron */n only supports n<=60, so larger intervals are clamped to hourly
-			cron_line = string.format("*/%d * * * * /usr/bin/nordvpn-rotate %s", math.min(interval, 60), iface_name)
-		elseif rotation_mode == "time" and payload.rotation_time then
-			-- Parse time (HH:MM format)
-			local hour, minute = payload.rotation_time:match("(%d+):(%d+)")
-			if hour and minute then
-				cron_line = string.format("%s %s * * * /usr/bin/nordvpn-rotate %s", minute, hour, iface_name)
-			end
-		end
-
-		if cron_line then
-			sys.call(string.format("(crontab -l 2>/dev/null | grep -v '/usr/bin/nordvpn-rotate %s'; echo '%s') | crontab -", iface_name, cron_line))
-		end
-	else
-		-- Remove cron job for this interface
-		sys.call(string.format("crontab -l 2>/dev/null | grep -v '/usr/bin/nordvpn-rotate %s' | crontab -", iface_name))
-	end
-
-	-- Setup background cache update cron job (runs every 6 hours)
-	-- Only add if not already present
-	local cache_cron_check = sys.exec(string.format("crontab -l 2>/dev/null | grep -c '/usr/bin/nordvpn-cache-update'"))
-	if not cache_cron_check or tonumber(cache_cron_check) == 0 then
-		local cache_cron_line = "0 */6 * * * /usr/bin/nordvpn-cache-update nordvpn >> /tmp/nordvpn_cache_update.log 2>&1"
-		sys.call(string.format("(crontab -l 2>/dev/null; echo '%s') | crontab -", cache_cron_line))
-	end
+	-- Scheduling is handled by the nordvpn-rotate and nordvpn-cache procd services;
+	-- they read the settings persisted above directly from UCI.
 
 	-- Restart network interface
 	local restart_result = sys.call(string.format("/sbin/ifup %s >/dev/null 2>&1", iface_name))

@@ -1,0 +1,48 @@
+#!/bin/sh /etc/rc.common
+# Scheduled NordVPN server rotation.
+# Reads the per-interface schedule from UCI on every iteration and runs
+# the one-shot worker (/usr/bin/nordvpn-rotate) when a rotation is due.
+
+START=99
+USE_PROCD=1
+
+start_service() {
+	# Drop cron entries installed by older cron-based versions
+	crontab -l 2>/dev/null | grep -v '/usr/bin/nordvpn-rotate' | grep -v '/usr/bin/nordvpn-cache-update' | crontab -
+
+	procd_open_instance nordvpn-rotate
+	procd_set_param command /bin/sh -c '
+		while true; do
+			now=$(date +%s)
+			for iface in $(uci -q show network | grep "nordvpn_rotation_enabled=.1" | cut -d. -f2 | sort -u); do
+				state=/tmp/nordvpn_rotate_last_$iface
+				last=0
+				[ -f "$state" ] && last=$(cat "$state" 2>/dev/null)
+				mode=$(uci -q get network.$iface.nordvpn_rotation_mode)
+				due=0
+				case "$mode" in
+					time)
+						target=$(uci -q get network.$iface.nordvpn_rotation_time)
+						if [ -n "$target" ] && [ "$(date +%H:%M)" = "$target" ] && [ $((now - last)) -gt 90 ]; then
+							due=1
+						fi
+						;;
+					*)
+						interval=$(uci -q get network.$iface.nordvpn_rotation_interval)
+						interval=${interval:-360}
+						if [ $((now - last)) -ge $((interval * 60)) ]; then
+							due=1
+						fi
+						;;
+				esac
+				if [ "$due" = "1" ]; then
+					date +%s > "$state"
+					/usr/bin/nordvpn-rotate "$iface" 2>&1 | logger -t nordvpn-rotate
+				fi
+			done
+			sleep 30
+		done
+	'
+	procd_set_param respawn
+	procd_close_instance
+}

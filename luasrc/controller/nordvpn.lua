@@ -6,32 +6,17 @@ local sys = require "luci.sys"
 local fs_ok, fs_mod = pcall(require, "nixio.fs")
 local fs = fs_ok and fs_mod or nil
 
+local cache = require "luci.nordvpn.cache"
+
 local API_BASE = "https://api.nordvpn.com/v1"
-local SERVERS_URL = API_BASE .. "/servers"
 local CREDS_URL = API_BASE .. "/users/services/credentials"
 local DEFAULT_INTERFACE = "nordvpn"
 local DEFAULT_PORT = 51820
 local DEFAULT_KEEPALIVE = 25
 local FIXED_ADDRESS = "10.5.0.2/16"
-local CACHE_FILENAME = "nordvpn_servers_cache.json"
-local DEFAULT_CACHE_DIR = "/tmp"
-local CACHE_MAX_AGE = 86400 -- 24 hours in seconds
-local PAGE_SIZE = 250
-local MAX_PAGES = 200 -- Safety guard to prevent infinite pagination
-local FETCH_STATUS_FILE = "/tmp/nordvpn_fetch_status.json"
-
-local httpclient
-local ok, mod = pcall(require, "luci.httpclient")
-if ok then
-	httpclient = mod
-end
-
--- Forward declarations for pagination helpers
-local new_location_accumulator
-local ensure_country
-local ensure_city
-local add_server
-local finalize_locations
+local SERVERS_URL = cache.SERVERS_URL
+local PAGE_SIZE = cache.PAGE_SIZE
+local FETCH_STATUS_FILE = cache.FETCH_STATUS_FILE
 
 local function new_cursor()
 	return require("luci.model.uci").cursor()
@@ -50,35 +35,6 @@ end
 
 seed_rng()
 
-local function write_fetch_status(status)
-	if not status then
-		return
-	end
-	status.updated_at = iso_ts()
-	local ok, tbl = pcall(function()
-		local f = io.open(FETCH_STATUS_FILE, "w")
-		if not f then
-			return
-		end
-		f:write(json.stringify(status))
-		f:close()
-	end)
-	return ok and tbl
-end
-
-local function read_fetch_status()
-	local f = io.open(FETCH_STATUS_FILE, "r")
-	if not f then
-		return nil
-	end
-	local content = f:read("*all")
-	f:close()
-	if not content or #content == 0 then
-		return nil
-	end
-	return json.parse(content)
-end
-
 local function find_interface_by_vpn_type(cur, vpn_type)
 	local found_interface = nil
 
@@ -90,98 +46,12 @@ local function find_interface_by_vpn_type(cur, vpn_type)
 	end)
 
 	return found_interface
-end
-
-local function get_configured_cache_dir(cur)
-	cur = cur or new_cursor()
-	cur:load("network")
-	local iface_name = find_interface_by_vpn_type(cur, "nordvpn") or DEFAULT_INTERFACE
-
-	-- Primary: network interface option (always present config)
-	local dir = cur:get("network", iface_name, "nordvpn_cache_dir")
-	if dir and dir ~= "" then
-		return dir
-	end
-
-	-- Secondary: dedicated config (if installed)
-	cur:load("nordvpn")
-	dir = cur:get("nordvpn", "settings", "cache_dir")
-	if dir and dir ~= "" then
-		return dir
-	end
-
-	dir = cur:get_first("nordvpn", "settings", "cache_dir")
-	if dir and dir ~= "" then
-		return dir
-	end
-end
-
-local function get_cache_file_path()
-	local configured_dir = get_configured_cache_dir()
-	local effective_dir = configured_dir or DEFAULT_CACHE_DIR
-	local fallback_used = false
-
-	-- Ensure directory exists or fall back to /tmp
-	if fs and effective_dir then
-		if not fs.stat(effective_dir, "type") then
-			fs.mkdirr(effective_dir)
-		end
-		if fs.stat(effective_dir, "type") ~= "dir" then
-			effective_dir = DEFAULT_CACHE_DIR
-			fallback_used = configured_dir and true or false
-		end
-	elseif not fs and configured_dir then
-		-- No filesystem helper; still honor configured path and let io.open handle errors
-		effective_dir = configured_dir
-		fallback_used = false
-	end
-
-	local cache_file = string.format("%s/%s", effective_dir, CACHE_FILENAME)
-	return cache_file, effective_dir, configured_dir, fallback_used
 end
 
 local function prepare_json_response(obj, status_code)
 	http.status(status_code or 200)
 	http.prepare_content("application/json")
 	http.write_json(obj or {})
-end
-
-local function find_interface_by_vpn_type(cur, vpn_type)
-	local found_interface = nil
-
-	cur:foreach("network", "interface", function(s)
-		if s.vpn_type == vpn_type then
-			found_interface = s[".name"]
-			return false
-		end
-	end)
-
-	return found_interface
-end
-
-local function http_fetch(url, options)
-	options = options or {}
-	local headers = options.headers or {}
-	local timeout = options.timeout or 15
-	local opts = { timeout = timeout }
-	if next(headers) then
-		opts.headers = headers
-	end
-
-	if httpclient then
-		local body, code = httpclient.request_to_buffer(url, opts)
-		if code == 200 and body and #body > 0 then
-			return body
-		end
-		return nil, string.format("upstream HTTP error: %s", code or "unknown")
-	end
-
-	local body = sys.httpget(url)
-	if body and #body > 0 then
-		return body
-	end
-
-	return nil, "no httpclient implementation available (check SSL/ca-certificates)"
 end
 
 local function validate_private_key(key)
@@ -248,386 +118,6 @@ local function get_private_key(token)
 	return data.nordlynx_private_key
 end
 
-local function read_cache(cache_file)
-	local f = io.open(cache_file, "r")
-	if not f then
-		return nil
-	end
-
-	local content = f:read("*all")
-	f:close()
-
-	if not content or #content == 0 then
-		return nil
-	end
-
-	local data = json.parse(content)
-	if not data then
-		return nil
-	end
-
-	-- No age check - we trust background updates to keep cache fresh
-	-- If cache exists, it's good enough to show to the user
-	return data
-end
-
-local function read_cache_for_update(cache_file)
-	-- Separate function for checking if background update is needed
-	-- This checks age and returns true if update is due
-	local f = io.open(cache_file, "r")
-	if not f then
-		return true -- No cache, update needed
-	end
-
-	local content = f:read("*all")
-	f:close()
-
-	if not content or #content == 0 then
-		return true -- Empty cache, update needed
-	end
-
-	local data = json.parse(content)
-	if not data then
-		return true -- Invalid cache, update needed
-	end
-
-	-- Check cache age for background update
-	if data.cached_at then
-		local age = os.time() - data.cached_at
-		if age > CACHE_MAX_AGE then
-			return true -- Cache expired, update needed
-		end
-	end
-
-	return false -- Cache is recent, no update needed
-end
-
-local function write_cache(data, cache_file)
-	-- Add cache timestamp
-	data.cached_at = os.time()
-	data.cache_info = {
-		created = os.date("!%Y-%m-%dT%H:%M:%SZ"),
-		expires_at = os.date("!%Y-%m-%dT%H:%M:%SZ", os.time() + CACHE_MAX_AGE)
-	}
-
-	local f = io.open(cache_file, "w")
-	if not f then
-		return false
-	end
-
-	f:write(json.stringify(data))
-	f:close()
-	return true
-end
-
-local function fetch_servers()
-	local acc = new_location_accumulator()
-	local offset = 0
-	local pages = 0
-	local last_page_size = 0
-	local started_at = iso_ts()
-
-	write_fetch_status({
-		state = "running",
-		started_at = started_at,
-		page_size = PAGE_SIZE,
-		pages = pages,
-		loaded = 0,
-		gateways = 0,
-		source = SERVERS_URL
-	})
-
-	local params = {
-		limit = tostring(PAGE_SIZE),
-		offset = tostring(offset),
-		["filters[servers_technologies][identifier]"] = "wireguard_udp"
-	}
-	while pages < MAX_PAGES do
-		local query_parts = {}
-		for k, v in pairs(params) do
-			table.insert(query_parts, k .. "=" .. v)
-		end
-		local url = SERVERS_URL .. (#query_parts > 0 and "?" .. table.concat(query_parts, "&") or "")
-
-		local body, err = http_fetch(url)
-		if not body then
-			write_fetch_status({
-				state = "error",
-				message = err or "unable to fetch NordVPN server list",
-				pages = pages,
-				page_size = PAGE_SIZE,
-				loaded = acc.stats.servers_seen,
-				gateways = acc.stats.gateways,
-				source = SERVERS_URL
-			})
-			return nil, err or "unable to fetch NordVPN server list"
-		end
-
-	local data = json.parse(body)
-	if not data or type(data) ~= "table" then
-		-- Detect Cloudflare/NordVPN rate limiting (HTML body with words below)
-		if body and #body > 0 then
-			local lower = string.lower(body)
-			if lower:find("rate limit") or lower:find("banned you temporarily") or lower:find("error 1015") then
-				local msg = "NordVPN API rate limited (Cloudflare). Please wait a few minutes and try again."
-				write_fetch_status({
-					state = "error",
-					message = msg,
-					pages = pages,
-					page_size = PAGE_SIZE,
-					loaded = acc.stats.servers_seen,
-					gateways = acc.stats.gateways,
-					source = SERVERS_URL
-				})
-				return nil, msg
-			end
-		end
-
-		write_fetch_status({
-			state = "error",
-			message = "failed to parse NordVPN server response",
-			pages = pages,
-			page_size = PAGE_SIZE,
-				loaded = acc.stats.servers_seen,
-				gateways = acc.stats.gateways,
-				source = SERVERS_URL
-			})
-			return nil, "failed to parse NordVPN server response"
-		end
-
-		last_page_size = #data
-		if last_page_size == 0 then
-			break
-		end
-
-		for _, server in ipairs(data) do
-			add_server(acc, server)
-		end
-
-		pages = pages + 1
-		offset = offset + PAGE_SIZE
-		params.offset = tostring(offset)
-
-		write_fetch_status({
-			state = "running",
-			started_at = started_at,
-			page_size = PAGE_SIZE,
-			pages = pages,
-			last_page = last_page_size,
-			loaded = acc.stats.servers_seen,
-			gateways = acc.stats.gateways,
-			source = SERVERS_URL
-		})
-
-		if last_page_size < PAGE_SIZE then
-			break
-		end
-	end
-
-	if pages >= MAX_PAGES then
-		write_fetch_status({
-			state = "error",
-			message = "pagination safety limit reached",
-			pages = pages,
-			page_size = PAGE_SIZE,
-			loaded = acc.stats.servers_seen,
-			gateways = acc.stats.gateways,
-			source = SERVERS_URL
-		})
-		return nil, "pagination safety limit reached"
-	end
-
-	local response = finalize_locations(acc)
-	response.pagination = {
-		page_size = PAGE_SIZE,
-		pages = pages,
-		servers_seen = acc.stats.servers_seen,
-		last_page_size = last_page_size
-	}
-
-	write_fetch_status({
-		state = "done",
-		page_size = PAGE_SIZE,
-		pages = pages,
-		last_page = last_page_size,
-		loaded = acc.stats.servers_seen,
-		gateways = response.stats.gateways,
-		finished_at = iso_ts(),
-		source = SERVERS_URL
-	})
-
-	return response
-end
-
-function new_location_accumulator()
-	return {
-		country_index = {},
-		location_index = {},
-		country_list = {},
-		stats = {
-			countries = 0,
-			cities = 0,
-			gateways = 0,
-			servers_seen = 0
-		}
-	}
-end
-
-function ensure_country(acc, country_name, country_code)
-	if not acc.country_index[country_name] then
-		local country = {
-			code = country_code,
-			name = country_name,
-			display_name = country_name,
-			cities = {},
-			gateway_count = 0
-		}
-		acc.country_index[country_name] = country
-		table.insert(acc.country_list, country)
-	end
-	return acc.country_index[country_name]
-end
-
-function ensure_city(acc, country, loc_code, city_name, latitude, longitude, country_code)
-	if not acc.location_index[loc_code] then
-		local city = {
-			code = loc_code,
-			name = city_name,
-			country = country.name,
-			country_code = country_code,
-			latitude = latitude or 0,
-			longitude = longitude or 0,
-			relays = {},
-			gateway_count = 0
-		}
-		acc.location_index[loc_code] = city
-		table.insert(country.cities, city)
-	end
-	return acc.location_index[loc_code]
-end
-
-function add_server(acc, server)
-	acc.stats.servers_seen = acc.stats.servers_seen + 1
-
-	if not server.locations or #server.locations == 0 then
-		return
-	end
-
-	local loc = server.locations[1]
-	local country_info = loc.country
-	if not country_info then
-		return
-	end
-
-	local country_name = country_info.name
-	local country_code = string.lower(country_info.code or "")
-	local city_name = country_info.city and country_info.city.name or "Unknown"
-	local location_code = country_code .. "-" .. city_name:lower():gsub("[^a-z0-9]", "")
-
-	local country = ensure_country(acc, country_name, country_code)
-	local city = ensure_city(acc, country, location_code, city_name, loc.latitude, loc.longitude, country_code)
-
-	-- Extract public_key
-	local public_key = nil
-	local technologies = server.technologies or {}
-	for _, tech in ipairs(technologies) do
-		if tech.identifier == "wireguard_udp" then
-			local metadata = tech.metadata or {}
-			for _, meta in ipairs(metadata) do
-				if meta.name == "public_key" then
-					public_key = meta.value
-					break
-				end
-			end
-			break
-		end
-	end
-
-		if public_key then
-			local hostname = server.hostname or ""
-			local friendly_name = server.name or ""
-
-			-- Detect multihop: hostname like cc1-cc2##.nordvpn.com or name like "CountryA - CountryB #"
-			local entry_code, exit_code = hostname:match("^([a-z][a-z])%-([a-z][a-z])%d+%.nordvpn%.com$")
-			local entry_name, exit_name = nil, nil
-			if not entry_code and friendly_name then
-				local a, b = friendly_name:match("^%s*([%w%s]+)%s*%-%s*([%w%s]+)%s*#")
-				if a and b then
-					entry_name = a:match("^%s*(.-)%s*$")
-					exit_name = b:match("^%s*(.-)%s*$")
-				end
-			end
-
-			local multihop = false
-			if entry_code and entry_code ~= country_code then
-				multihop = true
-			elseif entry_name and entry_name:lower() ~= country_name:lower() then
-				multihop = true
-			end
-
-			local relay_entry = {
-				hostname = hostname,
-				ip_address = server.station or "",
-				name = friendly_name,
-				public_key = public_key,
-				load = server.load or 0,
-				location = location_code,
-				port = DEFAULT_PORT,
-				active = true,
-				multihop = multihop,
-				entry_country_code = entry_code,
-				entry_country = entry_name or (entry_code and entry_code:upper() or nil),
-				exit_country_code = country_code,
-				exit_country = country_name
-			}
-			table.insert(city.relays, relay_entry)
-			city.gateway_count = city.gateway_count + 1
-			acc.stats.gateways = acc.stats.gateways + 1
-		end
-	end
-
-function finalize_locations(acc)
-	local filtered_countries = {}
-	for _, country in ipairs(acc.country_list) do
-		local valid_cities = {}
-		country.gateway_count = 0
-
-		for _, city in ipairs(country.cities) do
-			if #city.relays > 0 then
-				table.sort(city.relays, function(a, b)
-					return (a.name or "") < (b.name or "")
-				end)
-				table.insert(valid_cities, city)
-				country.gateway_count = country.gateway_count + #city.relays
-				acc.stats.cities = acc.stats.cities + 1
-			end
-		end
-
-		table.sort(valid_cities, function(a, b)
-			return (a.name or a.code or "") < (b.name or b.code or "")
-		end)
-
-		country.cities = valid_cities
-
-		if #valid_cities > 0 then
-			table.insert(filtered_countries, country)
-		end
-	end
-
-	table.sort(filtered_countries, function(a, b)
-		return a.name < b.name
-	end)
-
-	acc.stats.countries = #filtered_countries
-
-	return {
-		countries = filtered_countries,
-		stats = acc.stats,
-		source = SERVERS_URL,
-		generated_at = iso_ts()
-	}
-end
-
 local function find_interface_section(cur, name)
 	local section
 
@@ -673,19 +163,6 @@ local function find_or_create_peer(cur, iface_name)
 	return section_name
 end
 
-local function find_interface_by_vpn_type(cur, vpn_type)
-	local found_interface = nil
-
-	cur:foreach("network", "interface", function(s)
-		if s.vpn_type == vpn_type then
-			found_interface = s[".name"]
-			return false
-		end
-	end)
-
-	return found_interface
-end
-
 local function get_interface_state(cur, iface_name)
 	local iface = cur:get_all("network", iface_name)
 	if not iface then
@@ -722,7 +199,7 @@ end
 
 function list_locations()
 	local ok, err = pcall(function()
-		local cache_file, effective_cache_dir, configured_cache_dir, cache_fallback = get_cache_file_path()
+		local cache_file, effective_cache_dir, configured_cache_dir, cache_fallback = cache.get_cache_file_path()
 		local cache_meta = {
 			cache_file = cache_file,
 			effective_cache_dir = effective_cache_dir,
@@ -731,9 +208,9 @@ function list_locations()
 		}
 
 		-- Load from cache (no age checking - background job keeps it fresh)
-		local cached = read_cache(cache_file)
+		local cached = cache.read_cache(cache_file)
 		if cached then
-			write_fetch_status({
+			cache.write_fetch_status({
 				state = "idle",
 				cache = "hit",
 				pages = cached.pagination and cached.pagination.pages or 0,
@@ -742,7 +219,7 @@ function list_locations()
 				source = SERVERS_URL
 			})
 			cached.from_cache = true
-			cached.background_update_available = read_cache_for_update(cache_file)
+			cached.background_update_available = cache.read_cache_for_update(cache_file)
 			for k, v in pairs(cache_meta) do
 				cached[k] = v
 			end
@@ -768,7 +245,7 @@ end
 
 function refresh_locations()
 	local ok, err = pcall(function()
-		local cache_file, effective_cache_dir, configured_cache_dir, cache_fallback = get_cache_file_path()
+		local cache_file, effective_cache_dir, configured_cache_dir, cache_fallback = cache.get_cache_file_path()
 		local cache_meta = {
 			cache_file = cache_file,
 			effective_cache_dir = effective_cache_dir,
@@ -777,7 +254,7 @@ function refresh_locations()
 		}
 
 		-- Force refresh from API
-		local response, ferr = fetch_servers()
+		local response, ferr = cache.fetch_servers()
 		if not response then
 			prepare_json_response({ error = ferr }, 502)
 			return
@@ -787,7 +264,7 @@ function refresh_locations()
 		response.refreshed = true
 
 		-- Update cache
-		write_cache(response, cache_file)
+		cache.write_cache(response, cache_file)
 		for k, v in pairs(cache_meta) do
 			response[k] = v
 		end
@@ -801,7 +278,7 @@ function refresh_locations()
 end
 
 function locations_progress()
-	local status = read_fetch_status()
+	local status = cache.read_fetch_status()
 	if not status then
 		status = { state = "idle" }
 	end
@@ -878,7 +355,7 @@ function cache_settings()
 			end
 		end
 
-		local cache_file, effective_cache_dir, configured_cache_dir, cache_fallback = get_cache_file_path()
+		local cache_file, effective_cache_dir, configured_cache_dir, cache_fallback = cache.get_cache_file_path()
 		-- If we just set a value but couldn't read it back, at least echo the requested one
 		configured_cache_dir = configured_cache_dir or requested_dir
 
@@ -960,7 +437,7 @@ function get_config_only()
 	}
 
 	-- Include cache info for UI visibility
-	local cache_file, effective_cache_dir, configured_cache_dir, cache_fallback = get_cache_file_path()
+	local cache_file, effective_cache_dir, configured_cache_dir, cache_fallback = cache.get_cache_file_path()
 	response.cache = {
 		configured = configured_cache_dir or "",
 		effective = effective_cache_dir,
@@ -1046,7 +523,7 @@ function get_profile()
 	}
 
 	-- Include cache info for UI visibility
-	local cache_file, effective_cache_dir, configured_cache_dir, cache_fallback = get_cache_file_path()
+	local cache_file, effective_cache_dir, configured_cache_dir, cache_fallback = cache.get_cache_file_path()
 	response.cache = {
 		configured = configured_cache_dir or "",
 		effective = effective_cache_dir,

@@ -19,6 +19,7 @@ const rotate = _rotate.rotate,
       read_state = _rotate.read_state,
       last_attempt_ts = _rotate.last_attempt_ts;
 const next_rotation = require('nordvpn.service').next_rotation;
+const detect_routing = require('nordvpn.routing').detect;
 const _cache = require('nordvpn.cache');
 const read_cache = _cache.read_cache,
       read_fetch_status = _cache.read_fetch_status,
@@ -37,7 +38,9 @@ methods.status = {
 		let state = read_state();
 		if (state && state.last_success)
 			st.rotation.last_success = state.last_success;
-		st.rotation.next_run = next_rotation(load_settings(uci), last_attempt_ts(), time());
+		let s = load_settings(uci);
+		st.rotation.next_run = next_rotation(s, last_attempt_ts(), time());
+		st.routing = detect_routing(uci, s, true);
 		return st;
 	}
 };

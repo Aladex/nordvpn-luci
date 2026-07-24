@@ -202,6 +202,13 @@ function load_settings(uci) {
 		rotation_time: validate_time(g('rotation_time', '04:30')) || '04:30',
 		verify_timeout: bi('verify_timeout', '8', MIN_VERIFY_TIMEOUT, MAX_VERIFY_TIMEOUT),
 		max_retries: bi('max_retries', '10', 1, 50),
+		// Automatic traffic routing (zone + default route via the tunnel). The
+		// shipped config enables it for fresh installs; the load-time default
+		// stays off so upgraded/migrated setups keep their manual scheme.
+		auto_routing: g('auto_routing', '0') == '1',
+		killswitch: g('killswitch', '0') == '1',
+		block_ipv6: g('block_ipv6', '1') == '1',
+		use_vpn_dns: g('use_vpn_dns', '0') == '1',
 		cache_dir: g('cache_dir', ''),
 		cache_refresh_interval: bi('cache_refresh_interval', '21600', MIN_CACHE_REFRESH, MAX_CACHE_REFRESH),
 	};

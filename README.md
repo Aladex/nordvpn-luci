@@ -145,6 +145,10 @@ config settings 'main'
 	option rotation_time '04:30'     # HH:MM, router local time
 	option verify_timeout '8'        # seconds to wait for a WG handshake
 	option max_retries '10'          # candidate servers per rotation
+	option auto_routing '1'          # route all LAN traffic via the VPN
+	option killswitch '0'            # block LAN->WAN while the VPN is down
+	option block_ipv6 '1'            # block direct IPv6 (leak prevention)
+	option use_vpn_dns '0'           # push NordVPN resolvers while connected
 	option cache_dir ''              # empty = /tmp
 	option cache_refresh_interval '21600'   # seconds, background refresh
 ```
@@ -216,7 +220,35 @@ button in the UI starts the same one-shot worker (`nordvpn-cache-update`)
 asynchronously. Cache writes are atomic (temp file + rename), refreshes are
 serialized with a lock, and a failed refresh keeps the previous good cache.
 
-## Custom routing tables
+## Traffic routing & firewall
+
+The **Traffic routing** panel decides how LAN traffic reaches the tunnel.
+On every apply the backend first *detects* the current scheme:
+
+- **Manual** — a custom routing table is configured, or static routes/rules
+  referencing the VPN interface exist. The package then never touches routing
+  or firewall; the panel is purely informational (with an IPv6-leak warning
+  when the WAN has IPv6).
+
+  ![Manual routing detected](docs/screenshots/routing-manual.png)
+
+- **Automatic** — *Route all LAN traffic through the VPN* is enabled (the
+  default on fresh installs) and no manual scheme is detected. The backend
+  then maintains: `route_allowed_ips` on the peer (netifd installs the default
+  route via the tunnel and removes it when the interface goes down — the WAN
+  default is never modified), a masquerading firewall zone for the interface,
+  and a forwarding from the LAN zone. Optional toggles add a **kill switch**
+  (a REJECT rule LAN→WAN, so LAN clients get no internet while the VPN is
+  down), an **IPv6 block** (family-ipv6 REJECT LAN→WAN, on by default —
+  NordLynx is IPv4-only inside, so direct IPv6 would bypass the tunnel), and
+  **NordVPN DNS** on the interface.
+
+Everything the automatic mode creates is stamped with `nordvpn_managed`;
+disabling a toggle (or automatic mode) removes exactly the stamped objects and
+nothing else. User-created zones, forwardings, routes and rules are never
+modified. Upgrades from the legacy Lua app keep `auto_routing '0'`.
+
+### Custom routing tables (manual mode)
 
 Set **Routing table** (Advanced) to route VPN traffic through a separate table
 (`ip4table`/`ip6table` on the interface), then add rules under

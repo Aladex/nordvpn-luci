@@ -34,6 +34,9 @@ if [ -z "$(uci -q get "$pkg.main.config_version")" ]; then
 
 	if [ -n "$legacy_if" ]; then
 		uci set "$pkg.main.interface=$legacy_if"
+		# A legacy install has a working, hand-made routing/firewall scheme —
+		# never switch it to automatic routing on upgrade.
+		uci set "$pkg.main.auto_routing=0"
 		_copy nordvpn_hop_mode          hop_mode
 		_copy nordvpn_country_code      country_code
 		_copy nordvpn_city_code         city_code

@@ -22,6 +22,16 @@ config settings 'main'
 	# how many candidate servers a rotation may try before giving up.
 	option verify_timeout '8'
 	option max_retries '10'
+	# Automatic traffic routing: create a firewall zone and route all LAN
+	# traffic through the tunnel. Enabled for fresh installs; ignored (never
+	# touches anything) when a custom routing table or own routes are detected.
+	option auto_routing '1'
+	# Only meaningful with auto_routing: block LAN->WAN when the VPN is down
+	# (kill switch) and block direct IPv6 so it cannot bypass the tunnel.
+	option killswitch '0'
+	option block_ipv6 '1'
+	# Push NordVPN's resolvers (103.86.96.100/99.100) while the tunnel is up.
+	option use_vpn_dns '0'
 	# Server-list cache directory (empty = /tmp) and background refresh period.
 	option cache_dir ''
 	option cache_refresh_interval '21600'

@@ -138,6 +138,8 @@ return view.extend({
 			details.push(_('Endpoint: %s').format(s.endpoint));
 		if (s.gateway && /^[a-z]{2}-onion/.test(s.gateway))
 			details.push(_('🧅 Onion over VPN'));
+		if (s.state !== 'connected' && s.routing && s.routing.killswitch)
+			details.push(_('Kill switch is blocking LAN traffic'));
 		if (s.rotation && s.rotation.enabled)
 			details.push(_('Automatic rotation is on'));
 
@@ -217,7 +219,7 @@ return view.extend({
 
 	buildFormSections: function() {
 		this.refs = {};
-		return [ this.buildConnection(), this.buildRotation(), this.buildAdvanced() ];
+		return [ this.buildConnection(), this.buildRoutingSection(), this.buildRotation(), this.buildAdvanced() ];
 	},
 
 	row: function(labelText, fieldNodes, descText) {
@@ -286,6 +288,77 @@ return view.extend({
 
 		this.populateCountries();
 		return section;
+	},
+
+	// Traffic-routing panel. In a detected manual scheme it is purely
+	// informational; otherwise it drives the backend's stamped auto-routing.
+	buildRoutingSection: function() {
+		var g = function(o, d) { return uci.get('nordvpn', 'main', o) || d; };
+		var rt = (this.status || {}).routing || {};
+		var body = E('div', { class: 'cbi-section-node' });
+		this.autoRouting = null;
+
+		if (rt.mode === 'manual') {
+			var what = [];
+			var table = g('routing_table', '');
+			if (table)
+				what.push(_('routing table "%s"').format(table));
+			if (rt.user_routes)
+				what.push(_('%d custom routes/rules').format(rt.user_routes));
+			body.appendChild(this.row(_('Mode'), [
+				E('span', {}, _('Manual — %s detected. Routing and firewall are left untouched.')
+					.format(what.join(' + ') || _('custom configuration')))
+			]));
+			if (rt.ipv6_wan)
+				body.appendChild(this.row('', [ E('span', { class: 'nv-inline-note' },
+					_('⚠ IPv6 is active on the WAN and bypasses the VPN unless your rules cover it.')) ]));
+		} else {
+			this.autoRouting = E('input', { type: 'checkbox', change: L.bind(this.onRoutingToggle, this) });
+			this.autoRouting.checked = (g('auto_routing', '0') === '1');
+			this.ksBox = E('input', { type: 'checkbox', change: L.bind(this.markDirty, this) });
+			this.ksBox.checked = (g('killswitch', '0') === '1');
+			this.v6Box = E('input', { type: 'checkbox', change: L.bind(this.onRoutingToggle, this) });
+			this.v6Box.checked = (g('block_ipv6', '1') === '1');
+			this.dnsBox = E('input', { type: 'checkbox', change: L.bind(this.markDirty, this) });
+			this.dnsBox.checked = (g('use_vpn_dns', '0') === '1');
+			this.v6Warn = E('div', { class: 'cbi-value-description nv-inline-note hidden' },
+				_('⚠ IPv6 stays outside the tunnel and can leak your address.'));
+
+			body.appendChild(this.row(_('Traffic routing'), [
+				E('label', { class: 'nv-check' }, [ this.autoRouting, _('Route all LAN traffic through the VPN') ])
+			], _('Creates a firewall zone and a default route via the tunnel; disabling removes exactly what was created.')));
+			this.ksRow = this.row(_('Kill switch'), [
+				E('label', { class: 'nv-check' }, [ this.ksBox, _('Block LAN internet access while the VPN is down') ])
+			]);
+			this.v6Row = this.row(_('IPv6'), [
+				E('label', { class: 'nv-check' }, [ this.v6Box, _('Block direct IPv6 to prevent leaks') ]),
+				this.v6Warn
+			]);
+			this.dnsRow = this.row(_('DNS'), [
+				E('label', { class: 'nv-check' }, [ this.dnsBox, _('Use NordVPN DNS (103.86.96.100) while connected') ])
+			]);
+			body.appendChild(this.ksRow);
+			body.appendChild(this.v6Row);
+			body.appendChild(this.dnsRow);
+			this.onRoutingToggle(true);
+		}
+
+		return E('fieldset', { class: 'cbi-section' }, [
+			E('legend', {}, _('Traffic routing')),
+			body
+		]);
+	},
+
+	onRoutingToggle: function(init) {
+		if (init !== true)
+			this.markDirty();
+		var on = this.autoRouting && this.autoRouting.checked;
+		if (this.ksRow) this.ksRow.classList.toggle('hidden', !on);
+		if (this.v6Row) this.v6Row.classList.toggle('hidden', !on);
+		if (this.dnsRow) this.dnsRow.classList.toggle('hidden', !on);
+		var rt = (this.status || {}).routing || {};
+		if (this.v6Warn)
+			this.v6Warn.classList.toggle('hidden', !(on && this.v6Box && !this.v6Box.checked && rt.ipv6_wan));
 	},
 
 	buildRotation: function() {
@@ -612,6 +685,15 @@ return view.extend({
 
 		var fixed = this.serverSel ? this.serverSel.value : '';
 		setv('fixed_server', fixed);
+
+		// Routing toggles exist only when no manual scheme was detected; a
+		// manual setup's options are never written.
+		if (this.autoRouting) {
+			uci.set('nordvpn', 'main', 'auto_routing', this.autoRouting.checked ? '1' : '0');
+			uci.set('nordvpn', 'main', 'killswitch', (this.ksBox && this.ksBox.checked) ? '1' : '0');
+			uci.set('nordvpn', 'main', 'block_ipv6', (this.v6Box && this.v6Box.checked) ? '1' : '0');
+			uci.set('nordvpn', 'main', 'use_vpn_dns', (this.dnsBox && this.dnsBox.checked) ? '1' : '0');
+		}
 
 		var rotOn = this.rotEnable && this.rotEnable.checked && !fixed;
 		uci.set('nordvpn', 'main', 'rotation_enabled', rotOn ? '1' : '0');

@@ -20,6 +20,8 @@ const shuffle = _rotate.shuffle, plan_candidates = _rotate.plan_candidates;
 const _service = require('nordvpn.service');
 const should_refresh = _service.should_refresh, should_rotate = _service.should_rotate,
       next_rotation = _service.next_rotation;
+const _routing = require('nordvpn.routing');
+const detect_routing = _routing.detect, enforce_routing = _routing.enforce;
 import { cursor } from 'uci';
 
 let fails = 0;
@@ -184,6 +186,73 @@ write_cache(cache, cpath);
 	ok('time mode within 24h', (nr - now) <= 86400);
 	let lt = localtime(nr);
 	ok('time mode lands on 04:30:00', lt.hour == 4 && lt.min == 30 && lt.sec == 0);
+}
+
+// 8. routing detection and enforcement (mock uci; stamped objects only)
+{
+	let mks = function(over) {
+		let base = { interface: 'nordvpn', routing_table: '', auto_routing: false,
+			killswitch: false, block_ipv6: true, use_vpn_dns: false };
+		for (let k in over)
+			base[k] = over[k];
+		return base;
+	};
+	let mknet = function() {
+		return {
+			nordvpn: { '.type': 'interface', proto: 'wireguard', private_key: KEY },
+			peer: { '.type': 'wireguard_nordvpn', interface: 'nordvpn', endpoint_host: 'x.nordvpn.com' }
+		};
+	};
+	let mkfw = function() {
+		return {
+			zlan: { '.type': 'zone', name: 'lan', network: [ 'lan' ] },
+			zwan: { '.type': 'zone', name: 'wan', masq: '1', network: [ 'wan' ] }
+		};
+	};
+
+	// A custom routing table means manual mode.
+	global.MOCK_UCI = { network: mknet(), firewall: mkfw() };
+	let uci = cursor();
+	eq('routing: manual via table', detect_routing(uci, mks({ routing_table: 'vpn' }), false).mode, 'manual');
+
+	// A user route referencing the interface means manual mode, and enforce()
+	// must not change a single byte even with every toggle on.
+	global.MOCK_UCI = { network: mknet(), firewall: mkfw() };
+	global.MOCK_UCI.network.myroute = { '.type': 'route', interface: 'nordvpn', target: '0.0.0.0/0' };
+	uci = cursor();
+	eq('routing: manual via user route', detect_routing(uci, mks({ auto_routing: true }), false).mode, 'manual');
+	let before = sprintf('%J', global.MOCK_UCI);
+	let res = enforce_routing(uci, mks({ auto_routing: true, killswitch: true, use_vpn_dns: true }));
+	eq('routing: manual scheme untouched', sprintf('%J', global.MOCK_UCI), before);
+	eq('routing: manual reports no changes', res.changed_network || res.changed_firewall, false);
+
+	// Fresh install with automatic routing: zone, forwarding, default route,
+	// kill switch and IPv6 block appear; everything stamped.
+	global.MOCK_UCI = { network: mknet(), firewall: mkfw() };
+	uci = cursor();
+	let pristine = sprintf('%J', global.MOCK_UCI);
+	res = enforce_routing(uci, mks({ auto_routing: true, killswitch: true }));
+	ok('routing: auto changed firewall', res.changed_firewall);
+	ok('routing: auto changed network', res.changed_network);
+	let det = detect_routing(uci, mks({ auto_routing: true }), false);
+	eq('routing: auto mode', det.mode, 'auto');
+	eq('routing: zone created', det.zone, 'nordvpn');
+	ok('routing: zone is stamped', det.zone_managed);
+	ok('routing: default route set', det.route_allowed_ips);
+	ok('routing: kill switch installed', det.killswitch);
+	ok('routing: ipv6 block installed', det.ipv6_block);
+
+	// Idempotent: a second run changes nothing.
+	res = enforce_routing(uci, mks({ auto_routing: true, killswitch: true }));
+	eq('routing: idempotent', res.changed_network || res.changed_firewall, false);
+
+	// Turning a single toggle off removes exactly that object.
+	res = enforce_routing(uci, mks({ auto_routing: true, killswitch: false }));
+	ok('routing: kill switch removed', !detect_routing(uci, mks({ auto_routing: true }), false).killswitch);
+
+	// Turning automatic mode off restores the pristine configuration.
+	res = enforce_routing(uci, mks({ auto_routing: false }));
+	eq('routing: off restores pristine config', sprintf('%J', global.MOCK_UCI), pristine);
 }
 
 unlink(cpath);

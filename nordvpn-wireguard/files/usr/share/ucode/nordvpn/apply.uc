@@ -23,6 +23,8 @@ const candidates = _select.candidates,
       pick = _select.pick;
 const _api = require('nordvpn.api');
 const get_private_key = _api.get_private_key;
+const _routing = require('nordvpn.routing');
+const enforce_routing = _routing.enforce;
 
 // Locate the managed peer section (type wireguard_<iface>, interface=<iface>).
 function find_peer(uci, iface) {
@@ -194,6 +196,18 @@ function apply(uci) {
 	let cache = read_cache(cache_file_path(s));
 	if (!cache)
 		return { state: 'failure', error: 'server list not available; refresh the cache first' };
+
+	// Reconcile the managed routing/firewall objects with the settings. Only
+	// stamped objects are ever touched; a detected manual scheme is left alone.
+	let routing = enforce_routing(uci, s);
+	if (routing.changed_firewall) {
+		uci.commit('firewall');
+		run([ '/etc/init.d/firewall', 'reload' ]);
+	}
+	if (routing.changed_network)
+		uci.commit('network');
+	for (let note in routing.notes)
+		_common.log('routing: ' + note);
 
 	srand(time());
 	let saved = current_peer(uci, iface);

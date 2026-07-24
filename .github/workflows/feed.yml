@@ -1,0 +1,129 @@
+name: Package feed
+
+# Builds signed opkg (OpenWrt 24.10) and apk (snapshot) package feeds and
+# publishes them to GitHub Pages. Private keys live in repository secrets;
+# the matching public keys are committed under keys/.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.flavor }} feed
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - flavor: opkg
+            release: "24.10"
+          - flavor: apk
+            release: "snapshots"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the x86/64 SDK
+        run: |
+          sudo apt-get update && sudo apt-get install -y zstd
+          if [ "${{ matrix.release }}" = "snapshots" ]; then
+            BASE=https://downloads.openwrt.org/snapshots/targets/x86/64
+          else
+            VER=$(curl -sSL https://downloads.openwrt.org/releases/ \
+              | grep -o '${{ matrix.release }}\.[0-9]*' | sort -V | tail -1)
+            echo "release version: $VER"
+            BASE=https://downloads.openwrt.org/releases/$VER/targets/x86/64
+          fi
+          SDK=$(curl -sSL "$BASE/sha256sums" | grep -o 'openwrt-sdk-[^ ]*x86-64[^ ]*\.tar\.\(zst\|xz\)' | head -1)
+          echo "SDK=$SDK"
+          curl -fSL -o sdk.tar "$BASE/$SDK"
+          case "$SDK" in
+            *.zst) tar -I zstd -xf sdk.tar ;;
+            *) tar -xf sdk.tar ;;
+          esac
+          echo "SDKDIR=$(echo openwrt-sdk-*/)" >> "$GITHUB_ENV"
+
+      - name: Install the signing keys
+        env:
+          OPKG_USIGN_SEC: ${{ secrets.OPKG_USIGN_SEC }}
+          APK_SEC_PEM: ${{ secrets.APK_SEC_PEM }}
+        run: |
+          cd "$SDKDIR"
+          if [ "${{ matrix.flavor }}" = "opkg" ]; then
+            printf '%s\n' "$OPKG_USIGN_SEC" > key-build
+            cp "$GITHUB_WORKSPACE/keys/6bf1f0b6d25ceaad" key-build.pub
+          else
+            # The apk-based build system reads the EC key from key-build.apk.sec.
+            printf '%s\n' "$APK_SEC_PEM" > key-build.apk.sec
+            cp "$GITHUB_WORKSPACE/keys/nordvpn-luci-apk.pem" key-build.apk.pem
+          fi
+
+      - name: Build and index the packages
+        run: |
+          cp -r nordvpn-wireguard "$SDKDIR/package/nordvpn-wireguard"
+          cd "$SDKDIR"
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          cp -r "$GITHUB_WORKSPACE/luci-app-nordvpn" feeds/luci/applications/luci-app-nordvpn
+          ./scripts/feeds install luci-app-nordvpn
+          echo 'CONFIG_SIGNED_PACKAGES=y' >> .config
+          make defconfig
+          make package/nordvpn-wireguard/compile
+          make package/luci-app-nordvpn/compile
+          make package/index
+
+      - name: Collect the feed tree
+        run: |
+          OUT="$GITHUB_WORKSPACE/feed-out/packages/${{ matrix.flavor }}"
+          mkdir -p "$OUT"
+          cd "$SDKDIR/bin/packages"
+          ARCH=$(ls)
+          for feed in "$ARCH"/*/; do
+            name=$(basename "$feed")
+            if ls "$feed" | grep -q nordvpn; then
+              mkdir -p "$OUT/$name"
+              cp "$feed"/*nordvpn* "$OUT/$name/" 2>/dev/null || true
+              for idx in Packages Packages.gz Packages.sig packages.adb; do
+                [ -f "$feed/$idx" ] && cp "$feed/$idx" "$OUT/$name/"
+              done
+            fi
+          done
+          find "$GITHUB_WORKSPACE/feed-out" -type f
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: feed-${{ matrix.flavor }}
+          path: feed-out/
+          if-no-files-found: error
+
+  deploy:
+    name: Publish to GitHub Pages
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: feed-*
+          merge-multiple: true
+          path: site
+      - name: Add the public keys and a landing page
+        run: |
+          mkdir -p site/keys
+          cp keys/* site/keys/
+          cat > site/index.html <<'EOF'
+          <!doctype html><title>nordvpn-luci package feed</title>
+          <h1>nordvpn-luci package feed</h1>
+          <p>Signed OpenWrt package feeds for
+          <a href="https://github.com/Aladex/nordvpn-luci">nordvpn-luci</a>.
+          See the repository README for installation instructions.</p>
+          EOF
+      - name: Push to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: site
+          publish_branch: gh-pages
+          force_orphan: true

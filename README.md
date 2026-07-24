@@ -62,6 +62,35 @@ docs/screenshots/                          # LuCI page screenshots (README)
 
 ## Installation
 
+### From the signed package feed (recommended)
+
+CI publishes signed, architecture-independent packages for every release to
+<https://aladex.github.io/nordvpn-luci/>.
+
+**OpenWrt 24.10 (opkg):**
+
+```sh
+wget -O /etc/opkg/keys/6bf1f0b6d25ceaad \
+  https://aladex.github.io/nordvpn-luci/keys/6bf1f0b6d25ceaad
+echo 'src/gz nordvpn_luci https://aladex.github.io/nordvpn-luci/packages/opkg' \
+  >> /etc/opkg/customfeeds.conf
+opkg update
+opkg install luci-app-nordvpn        # or just nordvpn-wireguard for headless
+```
+
+**OpenWrt snapshots / 25.x (apk):**
+
+```sh
+wget -O /etc/apk/keys/nordvpn-luci-apk.pem \
+  https://aladex.github.io/nordvpn-luci/keys/nordvpn-luci-apk.pem
+echo 'https://aladex.github.io/nordvpn-luci/packages/apk/packages.adb' \
+  >> /etc/apk/repositories.d/customfeeds.list
+apk update
+apk add luci-app-nordvpn
+```
+
+Log out of LuCI and back in after installing, then open **VPN → NordVPN**.
+
 ### From a package feed / snapshot build
 
 Build with the OpenWrt SDK for your target. The backend is a plain packages-feed
@@ -331,6 +360,23 @@ migration (`uci-defaults`) that copies non-secret settings into
 removes any stored token, and drops old cron entries. It does not disconnect a
 working tunnel. Downgrading to the legacy Lua package is not supported (the new
 config layout is not read by it).
+
+## Related projects
+
+- [**NordVPN Lite**](https://nordvpn.com/blog/nordvpn-for-openwrt-routers/) —
+  the official, deliberately minimal OpenWrt client: one NordLynx connection,
+  CLI/basic LuCI setup. This project is the power-user alternative: multiple
+  parallel instances with separate credentials, per-network steering with kill
+  switch and IPv6 leak protection, scheduled rotation verified by WireGuard
+  handshake, Double VPN / Onion over VPN as explicit modes, and detection-first
+  safety around hand-built routing.
+- [**NordVPN-Easy-OpenWrt**](https://github.com/tis24dev/NordVPN-Easy-OpenWrt)
+  — a shell-based community integration with health checks and recovery. This
+  project instead uses native ucode/rpcd/procd with an offline test suite, and
+  covers multi-instance, steering and rotation.
+- Config generators (e.g.
+  [NordVPN-WireGuard-Config-Generator](https://github.com/mustafachyi/NordVPN-WireGuard-Config-Generator))
+  produce static `.conf` files and leave routing, rotation and recovery to you.
 
 ## Development
 

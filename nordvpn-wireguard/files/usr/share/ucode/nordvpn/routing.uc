@@ -245,9 +245,44 @@ function local_subnets(uci, skip) {
 		} catch (e) {
 			data = null;
 		}
-		for (let ifc in ((data ? data.interface : null) || []))
+		let dev2iface = {};
+		for (let ifc in ((data ? data.interface : null) || [])) {
+			if (ifc.l3_device)
+				dev2iface[ifc.l3_device] = ifc.interface;
 			for (let a in (ifc['ipv4-address'] || []))
 				add(ifc.interface, a.address, a.mask);
+		}
+
+		// Pinned exception routes: static kernel routes in the main table
+		// (typically /32 pins for VPN endpoints that must never be tunnelled,
+		// added by user scripts). Mirror them so steered clients keep the
+		// exception too. Only on-device (needs ubus for the device mapping).
+		let rt = run([ 'ip', '-4', 'route', 'show', 'table', 'main', 'proto', 'static' ]);
+		if (rt.code == 0) {
+			for (let line in split(trim(rt.stdout || ''), '\n')) {
+				let m = match(line, /^([0-9.]+(\/[0-9]+)?) +via +([0-9.]+) +dev +([^ ]+)/);
+				let target = null, gw = null, dev = null;
+				if (m) {
+					target = m[1];
+					gw = m[3];
+					dev = m[4];
+				} else {
+					m = match(line, /^([0-9.]+(\/[0-9]+)?) +dev +([^ ]+)/);
+					if (m) {
+						target = m[1];
+						dev = m[3];
+					}
+				}
+				if (!target || target == 'default' || !dev2iface[dev] || skip[dev2iface[dev]])
+					continue;
+				if (index(target, '/') < 0)
+					target += '/32';
+				if (seen[target])
+					continue;
+				seen[target] = 1;
+				push(out, { target: target, iface: dev2iface[dev], gateway: gw });
+			}
+		}
 	}
 	return out;
 }
@@ -292,6 +327,8 @@ function reconcile_local_routes(uci, iface, table, desired) {
 		let sec = uci.add('network', 'route');
 		uci.set('network', sec, 'interface', d.iface);
 		uci.set('network', sec, 'target', d.target);
+		if (d.gateway)
+			uci.set('network', sec, 'gateway', d.gateway);
 		uci.set('network', sec, 'table', table);
 		uci.set('network', sec, MARK, '1');
 		uci.set('network', sec, ROLE, 'steer_local');

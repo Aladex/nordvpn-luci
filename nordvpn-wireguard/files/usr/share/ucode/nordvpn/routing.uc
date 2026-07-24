@@ -253,13 +253,14 @@ function local_subnets(uci, skip) {
 				add(ifc.interface, a.address, a.mask);
 		}
 
-		// Pinned exception routes: user-added routes of any prefix length in
-		// the main table (endpoints/subnets that must never be tunnelled).
-		// netifd/scripted routes carry proto static, hand-added `ip route add`
-		// ones carry proto boot — mirror both so steered clients keep the
-		// exceptions. Only on-device (needs ubus for the device mapping).
+		// Pinned exception routes and foreign connected subnets in the main
+		// table, any prefix length. netifd/scripted routes carry proto static,
+		// hand-added `ip route add` ones proto boot, and connected subnets of
+		// interfaces netifd does not manage itself (docker bridges etc.) carry
+		// proto kernel — mirror all three so steered clients keep every local
+		// or pinned destination. Only on-device (needs ubus for the mapping).
 		let pin_lines = [];
-		for (let proto in [ 'static', 'boot' ]) {
+		for (let proto in [ 'static', 'boot', 'kernel' ]) {
 			let rt = run([ 'ip', '-4', 'route', 'show', 'table', 'main', 'proto', proto ]);
 			if (rt.code == 0)
 				for (let l in split(trim(rt.stdout || ''), '\n'))

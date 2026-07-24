@@ -5,6 +5,7 @@
 'use strict';
 
 import { rand, srand } from 'math';
+import { cursor } from 'uci';
 const _common = require('nordvpn.common');
 const FIXED_ADDRESS = _common.FIXED_ADDRESS,
       DEFAULT_PORT = _common.DEFAULT_PORT,
@@ -117,6 +118,10 @@ function write_relay(uci, iface, relay, s) {
 	if (!peer)
 		peer = uci.add('network', 'wireguard_' + iface);
 	uci.set('network', peer, 'interface', iface);
+	// Managed routing stamps the interface; the peer's allowed-IPs routes
+	// (netifd-installed, into ip4table when set) follow it.
+	if (uci.get('network', iface, 'nordvpn_managed_routing') == '1')
+		uci.set('network', peer, 'route_allowed_ips', '1');
 	uci.set('network', peer, 'public_key', relay.public_key);
 	uci.set('network', peer, 'endpoint_host', relay.hostname);
 	uci.set('network', peer, 'endpoint_port', '' + (relay.port || DEFAULT_PORT));
@@ -183,11 +188,42 @@ function connect_one(uci, iface, relay, s) {
 	return bring_up(iface);
 }
 
+// A global netifd reload has been observed (OpenWrt 24.10) to remove the
+// kernel's main IPv4 default route while netifd still reports it as
+// installed, cutting WAN connectivity. Self-heal: when the kernel lost the
+// default but netifd claims a gateway route on an up interface, re-add it.
+function restore_wan_default() {
+	let r = run([ 'ip', '-4', 'route', 'show', 'default' ]);
+	if (r.code != 0 || length(trim(r.stdout || '')) > 0)
+		return false;
+	let d = run([ 'ubus', 'call', 'network.interface', 'dump' ]);
+	if (d.code != 0)
+		return false;
+	let data;
+	try {
+		data = json(d.stdout);
+	} catch (e) {
+		return false;
+	}
+	for (let ifc in ((data ? data.interface : null) || [])) {
+		if (!ifc.up || !ifc.l3_device)
+			continue;
+		for (let rt in (ifc.route || [])) {
+			if (rt.target == '0.0.0.0' && rt.mask == 0 && rt.nexthop && rt.nexthop != '0.0.0.0') {
+				let res = run([ 'ip', 'route', 'add', 'default', 'via', rt.nexthop, 'dev', ifc.l3_device ]);
+				_common.log('restored missing WAN default route via ' + rt.nexthop + ' on ' + ifc.l3_device);
+				return res.code == 0;
+			}
+		}
+	}
+	return false;
+}
+
 // Apply the persisted configuration. A fixed server is applied once; an
 // automatic selection tries several candidates until one completes a handshake
 // (NordVPN publishes dead endpoints), rolling back to the previous working peer
 // if none do. Bounded so the rpc call stays within timeout.
-function apply(uci, instance) {
+function apply_inner(uci, instance) {
 	let s = load_settings(uci, instance);
 	let iface = validate_interface(s.interface);
 	if (!iface)
@@ -217,6 +253,11 @@ function apply(uci, instance) {
 		// Steering/prohibit rules are plain netifd config; a reload makes
 		// netifd apply the delta (unchanged interfaces are left alone).
 		run([ 'ubus', 'call', 'network', 'reload' ]);
+	}
+	if (routing.changed_network || routing.changed_firewall) {
+		// Committing deletions invalidates the cursor's section iteration
+		// state (find_peer silently missed sections) — start fresh.
+		uci = cursor();
 	}
 	for (let note in routing.notes)
 		_common.log('routing: ' + note);
@@ -266,6 +307,12 @@ function apply(uci, instance) {
 	}
 	return { state: 'failure', restored: saved != null,
 		error: 'could not reach any server for the current selection; restored the previous connection' };
+}
+
+function apply(uci, instance) {
+	let res = apply_inner(uci, instance);
+	restore_wan_default();
+	return res;
 }
 
 // Take the tunnel down and keep it down (auto '0') until the next apply;
@@ -362,6 +409,8 @@ function delete_instance(uci, name) {
 		uci.commit('network');
 		run([ 'ubus', 'call', 'network', 'reload' ]);
 	}
+	if (routing.changed_network || routing.changed_firewall)
+		uci = cursor(); // see apply(): committed deletions break iteration
 
 	run([ 'ifdown', iface ]);
 	let peer = find_peer(uci, iface);
@@ -379,12 +428,14 @@ function delete_instance(uci, name) {
 			uci.delete('nordvpn', 'main', k);
 		}
 		uci.commit('nordvpn');
+		restore_wan_default();
 		return { ok: true, reset: name, interface: iface };
 	}
 
 	uci.delete('nordvpn', name);
 	uci.commit('nordvpn');
+	restore_wan_default();
 	return { ok: true, deleted: name, interface: iface };
 }
 
-return { set_credentials, clear_credentials, current_peer, restore_peer, write_relay, bring_up, verify_handshake, connect_one, apply, disconnect, create_instance, delete_instance };
+return { set_credentials, clear_credentials, current_peer, restore_peer, write_relay, bring_up, verify_handshake, connect_one, apply, disconnect, create_instance, delete_instance, restore_wan_default };

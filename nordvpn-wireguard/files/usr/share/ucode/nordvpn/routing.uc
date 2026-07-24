@@ -9,12 +9,15 @@
 
 'use strict';
 
+import { readfile } from 'fs';
 const _common = require('nordvpn.common');
-const run = _common.run;
+const run = _common.run,
+      atomic_write = _common.atomic_write;
 
 const MARK = 'nordvpn_managed';
 const ROLE = 'nordvpn_role';
 const VPN_DNS = '103.86.96.100 103.86.99.100';
+const RT_TABLES = '/etc/iproute2/rt_tables';
 
 // ── Small uci helpers ────────────────────────────────────────────────
 
@@ -109,6 +112,54 @@ function find_managed(uci, sectype, role, iface) {
 		}
 	});
 	return found;
+}
+
+// netifd resolves named routing tables through /etc/iproute2/rt_tables; an
+// unregistered name makes ip4table and lookup rules silently inert. Register
+// the instance's table with a stamped line (best effort). Numeric tables and
+// already-registered names need nothing.
+function ensure_rt_table(name) {
+	if (match(name, /^[0-9]+$/))
+		return true;
+	let data = readfile(RT_TABLES) || '';
+	let used = {};
+	for (let line in split(data, '\n')) {
+		let m = match(line, /^[ \t]*([0-9]+)[ \t]+([^ \t#]+)/);
+		if (!m)
+			continue;
+		if (m[2] == name)
+			return true;
+		used[m[1]] = true;
+	}
+	for (let n = 100; n <= 252; n++) {
+		if (used['' + n])
+			continue;
+		return atomic_write(RT_TABLES,
+			data + (length(data) && substr(data, -1) != '\n' ? '\n' : '') +
+			sprintf('%d\t%s # %s\n', n, name, MARK));
+	}
+	return false;
+}
+
+// Remove ONLY a stamped rt_tables line for `name`; user entries are kept.
+function drop_rt_table(name) {
+	if (name == null || name == '' || match(name, /^[0-9]+$/))
+		return;
+	let data = readfile(RT_TABLES);
+	if (!data || index(data, MARK) < 0)
+		return;
+	let kept = [];
+	let changed = false;
+	for (let line in split(data, '\n')) {
+		let m = match(line, /^[ \t]*[0-9]+[ \t]+([^ \t#]+)[ \t]*#[ ]*nordvpn_managed/);
+		if (m && m[1] == name) {
+			changed = true;
+			continue;
+		}
+		push(kept, line);
+	}
+	if (changed)
+		atomic_write(RT_TABLES, join('\n', kept));
 }
 
 // True when the WAN has a default IPv6 route (potential leak path).
@@ -263,9 +314,14 @@ function enforce(uci, s) {
 	//    instance's ip4table when a routing table is set). Stamped on the
 	//    interface so a user-set route_allowed_ips is never removed.
 	if (managed) {
+		// Stamp the interface even before the first peer exists — write_relay
+		// propagates the stamp to route_allowed_ips when it creates the peer.
+		if (uci.get('network', iface, MARK + '_routing') != '1') {
+			uci.set('network', iface, MARK + '_routing', '1');
+			cn = true;
+		}
 		if (peer && uci.get('network', peer, 'route_allowed_ips') != '1') {
 			uci.set('network', peer, 'route_allowed_ips', '1');
-			uci.set('network', iface, MARK + '_routing', '1');
 			cn = true;
 		}
 	} else if (uci.get('network', iface, MARK + '_routing') == '1') {
@@ -284,6 +340,12 @@ function enforce(uci, s) {
 	//     the tunnel's table cannot serve the traffic.
 	let steer_nets = steer ? s.source_networks : [];
 	let table = s.routing_table;
+	if (steer) {
+		if (!ensure_rt_table(table))
+			push(notes, 'could not register routing table ' + table + ' in ' + RT_TABLES);
+	} else {
+		drop_rt_table(s.routing_table);
+	}
 	if (reconcile_rules(uci, 'rule', 'steer_lookup', iface, steer_nets, function(net) {
 		return { 'in': net, lookup: table, priority: '20000' };
 	}))

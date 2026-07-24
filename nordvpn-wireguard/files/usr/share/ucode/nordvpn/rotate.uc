@@ -24,7 +24,8 @@ const bring_up = _apply.bring_up,
       current_peer = _apply.current_peer,
       restore_peer = _apply.restore_peer,
       connect_one = _apply.connect_one,
-      verify_handshake = _apply.verify_handshake;
+      verify_handshake = _apply.verify_handshake,
+      restore_wan_default = _apply.restore_wan_default;
 
 const ROTATE_LOCK = '/tmp/nordvpn_rotate.lock';
 const ROTATE_STATE = '/tmp/nordvpn_rotate_state.json';
@@ -160,6 +161,7 @@ function rotate(uci, instance) {
 		res = { error: 'rotation error: ' + e };
 	}
 	release_lock(lock);
+	restore_wan_default();
 	return res;
 }
 

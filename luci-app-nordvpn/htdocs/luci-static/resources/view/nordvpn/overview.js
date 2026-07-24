@@ -40,15 +40,13 @@ var STYLE = '' +
 	'.nv-seg button{border:0;background:transparent;margin:0;padding:.3em 1.1em;cursor:pointer;font:inherit;color:inherit;line-height:1.3;white-space:nowrap;flex:1 1 auto}' +
 	'.nv-seg button+button{border-left:1px solid #0069d6}' +
 	'.nv-seg button.active{background:#0069d6;color:#fff}' +
-	// The theme stacks tables on max-device-width (the bootstrap breakpoint),
-	// which fires on phones even when the browser viewport is desktop-sized —
-	// match both conditions so the compact layout replaces the stacking.
-	'@media screen and (max-device-width:600px),screen and (max-width:992px){' +
-		'.nv-itable .tr.table-titles{display:none!important}' +
-		'.nv-itable .tr{display:flex!important;flex-wrap:wrap;align-items:center;gap:.2em .7em;padding:.45em 0;border-bottom:1px solid var(--border-color-medium,#555)}' +
-		'.nv-itable .td{display:inline-flex!important;align-items:center;width:auto!important;padding:0!important;border:none!important;background:none!important}' +
-		'.nv-itable .td::before{display:none!important}' +
-	'}' +
+	// Plain flex rows (no LuCI .table classes), so the theme's own responsive
+	// table stacking can never apply; wraps naturally down to ~340 px.
+	'.nv-inst-row{display:flex;flex-wrap:wrap;align-items:center;gap:.25em .8em;padding:.55em 0;border-bottom:1px solid var(--border-color-medium,#ccc);cursor:pointer}' +
+	'.nv-inst-row:last-child{border-bottom:none}' +
+	'.nv-inst-name{font-weight:bold}' +
+	'.nv-inst-dim{color:var(--text-color-medium,#666);font-size:.92em}' +
+	'.nv-inst-act{margin-left:auto}' +
 	'.nv-token-field>div{display:block;width:100%}' +
 	'.nv-token-field .control-group{display:flex;width:100%}' +
 	'.nv-token-field .control-group input{flex:1 1 auto;width:100%}' +
@@ -109,13 +107,7 @@ return view.extend({
 	},
 
 	updateInstancesTable: function() {
-		var rows = [ E('tr', { class: 'tr table-titles' }, [
-			E('th', { class: 'th' }, _('Instance')),
-			E('th', { class: 'th' }, _('Status')),
-			E('th', { class: 'th' }, _('Server')),
-			E('th', { class: 'th' }, _('Next rotation')),
-			E('th', { class: 'th' }, '')
-		]) ];
+		var rows = [];
 
 		(this.instances || []).forEach(L.bind(function(st) {
 			var info = this.stateInfo(st.state || 'not_configured');
@@ -129,16 +121,15 @@ return view.extend({
 			else if (r.enabled)
 				next = _('on schedule');
 
-			rows.push(E('tr', {
-				class: 'tr',
-				style: selected ? 'font-weight:bold' : 'cursor:pointer',
+			rows.push(E('div', {
+				class: 'nv-inst-row',
 				click: L.bind(this.selectInstance, this, st.instance)
 			}, [
-				E('td', { class: 'td' }, (selected ? '▸ ' : '') + st.instance),
-				E('td', { class: 'td', style: 'color:' + info.color }, info.label),
-				E('td', { class: 'td' }, (flag ? flag + ' ' : '') + (st.gateway || '—')),
-				E('td', { class: 'td' }, next),
-				E('td', { class: 'td' }, E('button', {
+				E('span', { class: 'nv-inst-name' }, (selected ? '▸ ' : '') + st.instance),
+				E('span', { style: 'color:' + info.color }, info.label),
+				E('span', {}, (flag ? flag + ' ' : '') + (st.gateway || '—')),
+				next ? E('span', { class: 'nv-inst-dim' }, '⟳ ' + next) : '',
+				E('span', { class: 'nv-inst-act' }, E('button', {
 					class: 'cbi-button cbi-button-remove',
 					click: L.bind(this.showDeleteInstanceModal, this, st.instance)
 				}, st.instance === 'main' ? _('Reset') : _('Delete')))
@@ -147,9 +138,9 @@ return view.extend({
 
 		dom.content(this.instancesNode, E('fieldset', { class: 'cbi-section' }, [
 			E('legend', {}, _('VPN instances')),
-			E('div', { class: 'cbi-section-node nv-itable' }, [
-				E('table', { class: 'table' }, rows),
-				E('div', { style: 'margin-top:.5em' }, [
+			E('div', { class: 'cbi-section-node' }, [
+				E('div', {}, rows),
+				E('div', { style: 'margin-top:.6em' }, [
 					E('button', { class: 'cbi-button cbi-button-add', click: L.bind(this.showAddInstanceModal, this) },
 						_('Add instance'))
 				])

@@ -13,6 +13,7 @@
 
 var callStatus = rpc.declare({ object: 'nordvpn', method: 'status' });
 var callLocations = rpc.declare({ object: 'nordvpn', method: 'locations' });
+var callServers = rpc.declare({ object: 'nordvpn', method: 'servers', params: [ 'country', 'city', 'hop_mode' ] });
 var callRefreshStatus = rpc.declare({ object: 'nordvpn', method: 'refresh_status' });
 var callSetCredentials = rpc.declare({ object: 'nordvpn', method: 'set_credentials', params: [ 'token' ] });
 var callApply = rpc.declare({ object: 'nordvpn', method: 'apply' });
@@ -360,12 +361,12 @@ return view.extend({
 		var multi = (this.hopMode() === 'multihop');
 		var out = [];
 		l.countries.forEach(function(c) {
-			var cities = (c.cities || []).map(function(city) {
-				var relays = (city.relays || []).filter(function(r) { return !!r.multihop === multi; });
-				return Object.assign({}, city, { relays: relays });
-			}).filter(function(city) { return city.relays.length > 0; });
-			if (cities.length)
-				out.push(Object.assign({}, c, { cities: cities }));
+			var cities = (c.cities || []).filter(function(city) {
+				return (multi ? city.multi : city.single) > 0;
+			});
+			var count = multi ? c.multi : c.single;
+			if (cities.length && count > 0)
+				out.push(Object.assign({}, c, { cities: cities, gateway_count: count }));
 		});
 		return out;
 	},
@@ -411,8 +412,9 @@ return view.extend({
 		if (c) {
 			(c.cities || []).forEach(L.bind(function(city) {
 				this._cityData[city.code] = city;
+				var ccount = (this.hopMode() === 'multihop') ? city.multi : city.single;
 				this.citySel.appendChild(E('option', { value: city.code, selected: (city.code === chosenCity) || null },
-					'%s (%d)'.format(city.name, city.relays.length)));
+					'%s (%d)'.format(city.name, ccount)));
 			}, this));
 		}
 		this.onCityChange();
@@ -421,17 +423,24 @@ return view.extend({
 	onCityChange: function() {
 		this.markDirty();
 		var city = this._cityData ? this._cityData[this.citySel.value] : null;
-		var chosenServer = uci.get('nordvpn', 'main', 'fixed_server') || '';
 
 		dom.content(this.serverSel, E('option', { value: '' }, _('Automatic server')));
 		this.serverSel.disabled = !city;
-		if (city) {
-			(city.relays || []).forEach(function(r) {
+		this.onServerChange();
+		if (!city)
+			return;
+
+		var cc = this.countrySel.value;
+		var chosenServer = uci.get('nordvpn', 'main', 'fixed_server') || '';
+		callServers(cc, city.code, this.hopMode()).then(L.bind(function(res) {
+			var relays = (res && res.relays) || [];
+			relays.forEach(function(r) {
 				var label = '%s (%s%%)'.format(r.name || r.hostname, r.load != null ? r.load : '?');
 				this.serverSel.appendChild(E('option', { value: r.hostname, selected: (r.hostname === chosenServer) || null }, label));
 			}, this);
-		}
-		this.onServerChange();
+			if (chosenServer)
+				this.onServerChange();
+		}, this)).catch(function() {});
 	},
 
 	onServerChange: function() {

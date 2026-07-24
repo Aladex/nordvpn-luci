@@ -19,7 +19,9 @@ const rotate = _rotate.rotate, read_state = _rotate.read_state;
 const _cache = require('nordvpn.cache');
 const read_cache = _cache.read_cache,
       read_fetch_status = _cache.read_fetch_status,
-      cache_is_stale = _cache.cache_is_stale;
+      cache_is_stale = _cache.cache_is_stale,
+      locations_tree = _cache.locations_tree,
+      city_relays = _cache.city_relays;
 
 const methods = {};
 
@@ -45,11 +47,22 @@ methods.locations = {
 		return {
 			available: true,
 			state: cache_is_stale(path) ? 'stale' : 'ready',
-			countries: cache.countries,
+			countries: locations_tree(cache),
 			stats: cache.stats,
 			cache_info: cache.cache_info,
 			cached_at: cache.cached_at
 		};
+	}
+};
+
+methods.servers = {
+	args: { country: '', city: '', hop_mode: '' },
+	call: function(request) {
+		let a = request.args || {};
+		let cache = read_cache(cache_file_path(load_settings(cursor())));
+		if (!cache)
+			return { relays: [] };
+		return { relays: city_relays(cache, a.country, a.city, a.hop_mode) };
 	}
 };
 

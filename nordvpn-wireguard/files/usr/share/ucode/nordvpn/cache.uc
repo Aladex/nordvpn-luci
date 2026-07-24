@@ -41,7 +41,7 @@ function safe_json(str) {
 // MAX_RESPONSE bytes. Returns { ok, body, error }.
 function http_get(url) {
 	let argv = [
-		'curl', '-s', '-S',
+		'curl', '-g', '-s', '-S',
 		'--connect-timeout', '' + CONNECT_TIMEOUT,
 		'--max-time', '' + TOTAL_TIMEOUT,
 		'-H', 'Accept: application/json',
@@ -242,6 +242,51 @@ function finalize(acc) {
 	};
 }
 
+// Trimmed country/city tree for the UI (no per-relay data). Small enough to
+// return over ubus, which caps message size — the full list is multi-MB.
+function locations_tree(cache) {
+	let out = [];
+	if (!cache || type(cache.countries) != 'array')
+		return out;
+	for (let c in cache.countries) {
+		let cities = [], cs = 0, cm = 0;
+		for (let city in c.cities) {
+			let s = 0, m = 0;
+			for (let r in city.relays)
+				r.multihop ? m++ : s++;
+			push(cities, { code: city.code, name: city.name, single: s, multi: m });
+			cs += s;
+			cm += m;
+		}
+		push(out, { code: c.code, name: c.name, single: cs, multi: cm, cities: cities });
+	}
+	return out;
+}
+
+// Trimmed relay list for one city, optionally filtered by hop mode.
+function city_relays(cache, country_code, city_code, hop_mode) {
+	let out = [];
+	if (!cache || type(cache.countries) != 'array')
+		return out;
+	let cc = country_code ? lc(country_code) : null;
+	let want_multi = (hop_mode == 'multihop');
+	for (let c in cache.countries) {
+		if (cc && lc(c.code) != cc)
+			continue;
+		for (let city in c.cities) {
+			if (city.code != city_code)
+				continue;
+			for (let r in city.relays) {
+				let is_multi = r.multihop ? true : false;
+				if (hop_mode == null || hop_mode == '' || want_multi == is_multi)
+					push(out, { hostname: r.hostname, name: r.name, load: r.load, multihop: r.multihop });
+			}
+			return out;
+		}
+	}
+	return out;
+}
+
 // Normalize an array of raw API server objects into the cache structure.
 // Exported for fixture tests (no network access required).
 function normalize(list) {
@@ -380,5 +425,6 @@ function fetch_and_build(path) {
 
 return {
 	write_fetch_status, read_fetch_status, add_server, normalize,
+	locations_tree, city_relays,
 	fetch_servers, read_cache, cache_is_stale, write_cache, fetch_and_build
 };

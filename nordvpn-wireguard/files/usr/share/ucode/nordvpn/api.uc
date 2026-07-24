@@ -46,7 +46,7 @@ function get_private_key(token) {
 	w.close();
 
 	let argv = [
-		'curl', '-s', '-S', '--fail',
+		'curl', '-g', '-s', '-S', '--fail',
 		'--connect-timeout', '15', '--max-time', '30',
 		'-H', 'Accept: application/json',
 		'--config', '/proc/self/fd/' + rfd,

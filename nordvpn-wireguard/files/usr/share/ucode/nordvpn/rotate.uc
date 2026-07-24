@@ -33,7 +33,9 @@ const SETTLE_SECONDS = 3;
 
 // Fisher-Yates shuffle (in a copy). Exported for testing.
 function shuffle(list) {
-	let a = [ ...list ];
+	let a = [];
+	for (let x in list)
+		push(a, x);
 	for (let i = length(a) - 1; i > 0; i--) {
 		let j = rand() % (i + 1);
 		let t = a[i]; a[i] = a[j]; a[j] = t;

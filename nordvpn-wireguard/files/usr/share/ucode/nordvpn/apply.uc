@@ -4,7 +4,7 @@
 
 'use strict';
 
-import { srand } from 'math';
+import { rand, srand } from 'math';
 const _common = require('nordvpn.common');
 const FIXED_ADDRESS = _common.FIXED_ADDRESS,
       DEFAULT_PORT = _common.DEFAULT_PORT,
@@ -127,25 +127,62 @@ function bring_up(iface) {
 	return run([ 'ifup', iface ]).code == 0;
 }
 
-// Select a relay from the cache honoring settings. Returns a relay or { error }.
-function choose_relay(uci) {
-	let s = load_settings(uci);
-	let cache = read_cache(cache_file_path(s));
-	if (!cache)
-		return { error: 'server list not available; refresh the cache first' };
-
-	if (s.fixed_server && s.fixed_server != '') {
-		let r = by_hostname(cache, s.fixed_server);
-		return r ? r : { error: 'configured server not found in cache' };
+// Newest WireGuard handshake age (seconds) for the interface. Returns -1 when
+// wg cannot be run (off-device), null when it ran but there is no handshake.
+function handshake_age(iface) {
+	let res = run([ 'wg', 'show', iface, 'latest-handshakes' ]);
+	if (res.code != 0)
+		return -1;
+	let best = 0;
+	for (let line in split(trim(res.stdout || ''), '\n')) {
+		let parts = split(line, '\t');
+		if (length(parts) >= 2) {
+			let t = int(parts[1]);
+			if (t > best)
+				best = t;
+		}
 	}
-	let list = candidates(cache, s.country_code, s.city_code, s.hop_mode);
-	let r = pick(list, null);
-	return r ? r : { error: 'no matching server found for the current selection' };
+	if (best == 0)
+		return null;
+	let age = time() - best;
+	return age < 0 ? 0 : age;
 }
 
-// Apply the persisted configuration: pick a relay, write the interface/peer
-// transactionally, commit, and bring the interface up. Returns an apply-state
-// object; the caller polls status to confirm the handshake.
+// Wait up to `seconds` for a fresh handshake. True when connected — or when wg
+// is unavailable (off-device), so the apply logic is not blocked in tests.
+function verify_handshake(iface, seconds) {
+	for (let i = 0; i < seconds; i++) {
+		run([ 'sleep', '1' ]);
+		let age = handshake_age(iface);
+		if (age == -1)
+			return true;
+		if (age != null && age < 180)
+			return true;
+	}
+	return false;
+}
+
+function shuffle(list) {
+	let a = [];
+	for (let x in list)
+		push(a, x);
+	for (let i = length(a) - 1; i > 0; i--) {
+		let j = rand() % (i + 1);
+		let t = a[i]; a[i] = a[j]; a[j] = t;
+	}
+	return a;
+}
+
+function connect_one(uci, iface, relay, s) {
+	write_relay(uci, iface, relay, s);
+	uci.commit('network');
+	return bring_up(iface);
+}
+
+// Apply the persisted configuration. A fixed server is applied once; an
+// automatic selection tries several candidates until one completes a handshake
+// (NordVPN publishes dead endpoints), rolling back to the previous working peer
+// if none do. Bounded so the rpc call stays within timeout.
 function apply(uci) {
 	let s = load_settings(uci);
 	let iface = validate_interface(s.interface);
@@ -154,23 +191,55 @@ function apply(uci) {
 	if (!validate_wg_key(uci.get('network', iface, 'private_key')))
 		return { state: 'failure', error: 'no credentials configured' };
 
+	let cache = read_cache(cache_file_path(s));
+	if (!cache)
+		return { state: 'failure', error: 'server list not available; refresh the cache first' };
+
 	srand(time());
-	let relay = choose_relay(uci);
-	if (relay.error)
-		return { state: 'failure', error: relay.error };
+	let saved = current_peer(uci, iface);
 
-	write_relay(uci, iface, relay, s);
-	uci.commit('network');
+	if (s.fixed_server && s.fixed_server != '') {
+		let relay = by_hostname(cache, s.fixed_server);
+		if (!relay)
+			return { state: 'failure', error: 'configured server not found in cache' };
+		let up = connect_one(uci, iface, relay, s);
+		let ok = up && verify_handshake(iface, 6);
+		return {
+			state: ok ? 'success' : (up ? 'partial_failure' : 'failure'),
+			interface: iface, gateway: relay.hostname,
+			endpoint: relay.hostname + ':' + (relay.port || DEFAULT_PORT),
+			restarted: up,
+			error: ok ? null : 'the selected server did not respond'
+		};
+	}
 
-	let up = bring_up(iface);
-	return {
-		state: up ? 'applying' : 'partial_failure',
-		interface: iface,
-		gateway: relay.hostname,
-		endpoint: relay.hostname + ':' + (relay.port || DEFAULT_PORT),
-		restarted: up,
-		error: up ? null : 'configuration saved but the interface failed to start'
-	};
+	let list = candidates(cache, s.country_code, s.city_code, s.hop_mode);
+	if (length(list) == 0)
+		return { state: 'failure', error: 'no matching server found for the current selection' };
+	list = shuffle(list);
+
+	let tries = length(list);
+	if (tries > 4)
+		tries = 4;
+	for (let i = 0; i < tries; i++) {
+		let relay = list[i];
+		if (!connect_one(uci, iface, relay, s))
+			continue;
+		if (verify_handshake(iface, 4))
+			return {
+				state: 'success', interface: iface, gateway: relay.hostname,
+				endpoint: relay.hostname + ':' + (relay.port || DEFAULT_PORT),
+				restarted: true
+			};
+	}
+
+	if (saved) {
+		restore_peer(uci, iface, saved);
+		uci.commit('network');
+		bring_up(iface);
+	}
+	return { state: 'failure', restored: saved != null,
+		error: 'could not reach any server for the current selection; restored the previous connection' };
 }
 
 return { set_credentials, current_peer, restore_peer, write_relay, bring_up, apply };

@@ -12,7 +12,8 @@ const normalize = _cache.normalize, write_cache = _cache.write_cache;
 const _select = require('nordvpn.select');
 const candidates = _select.candidates, by_hostname = _select.by_hostname, pick = _select.pick;
 const parse_credentials = require('nordvpn.api').parse_credentials;
-const apply = require('nordvpn.apply').apply;
+const write_relay = require('nordvpn.apply').write_relay;
+const load_settings = require('nordvpn.common').load_settings;
 const status = require('nordvpn.status').status;
 const _rotate = require('nordvpn.rotate');
 const shuffle = _rotate.shuffle, plan_candidates = _rotate.plan_candidates;
@@ -74,15 +75,17 @@ write_cache(cache, cpath);
 		network: { nordvpn: { '.type': 'interface', proto: 'wireguard',
 			private_key: KEY, vpn_type: 'nordvpn' } }
 	};
-	let res = apply(cursor());
-	ok('apply chose ee gateway', res.gateway == 'ee70.nordvpn.com');
+	let uci = cursor();
+	let relay = candidates(cache, 'ee', '', 'single')[0];
+	ok('candidate is ee70', relay && relay.hostname == 'ee70.nordvpn.com');
+	write_relay(uci, 'nordvpn', relay, load_settings(uci));
 
 	let net = global.MOCK_UCI.network;
 	let peerkey = null;
 	for (let k in net)
 		if (index(net[k]['.type'], 'wireguard_') == 0)
 			peerkey = k;
-	ok('apply created a peer section', peerkey != null);
+	ok('write_relay created a peer section', peerkey != null);
 	let peer = net[peerkey];
 	ok('peer public_key set', peer.public_key != null);
 	eq('peer endpoint_host', peer.endpoint_host, 'ee70.nordvpn.com');

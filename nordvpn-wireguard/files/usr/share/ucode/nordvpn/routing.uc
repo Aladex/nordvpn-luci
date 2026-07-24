@@ -114,6 +114,193 @@ function find_managed(uci, sectype, role, iface) {
 	return found;
 }
 
+// ── Local subnets (steering bypass) ──────────────────────────────────
+// A steered table's default swallows traffic to OTHER local subnets too, so
+// LAN↔VLAN and LAN↔tunnel-services connectivity would silently die. Steering
+// therefore maintains stamped bypass routes for every local IPv4 subnet.
+
+function ip4_to_int(a) {
+	let m = match(a, /^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$/);
+	if (!m)
+		return null;
+	let o1 = int(m[1]), o2 = int(m[2]), o3 = int(m[3]), o4 = int(m[4]);
+	if (o1 > 255 || o2 > 255 || o3 > 255 || o4 > 255)
+		return null;
+	return ((o1 * 256 + o2) * 256 + o3) * 256 + o4;
+}
+
+function int_to_ip4(n) {
+	return sprintf('%d.%d.%d.%d',
+		(n >> 24) & 0xff, (n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff);
+}
+
+function mask_len(netmask) {
+	let n = ip4_to_int(netmask);
+	if (n == null)
+		return null;
+	let len = 0;
+	while (len < 32 && (n & 0x80000000)) {
+		len++;
+		n = (n << 1) & 0xffffffff;
+	}
+	return (n & 0xffffffff) == 0 ? len : null;
+}
+
+// Normalized 'a.b.c.d/len' network of a uci route section, accepting both the
+// CIDR target form and the separate target+netmask form. Null when unparsable.
+function route_cidr(sec) {
+	let t = '' + (sec.target || '');
+	let addr = null, len = null;
+	let m = match(t, /^([0-9.]+)\/([0-9]+)$/);
+	if (m) {
+		addr = m[1];
+		len = int(m[2]);
+	} else if (sec.netmask) {
+		addr = t;
+		len = mask_len('' + sec.netmask);
+	} else {
+		return null;
+	}
+	if (len == null || len < 0 || len > 32)
+		return null;
+	let ip = ip4_to_int(addr);
+	if (ip == null)
+		return null;
+	let mask = (len == 0) ? 0 : ((0xffffffff << (32 - len)) & 0xffffffff);
+	return sprintf('%s/%d', int_to_ip4(ip & mask), len);
+}
+
+// Every local IPv4 subnet as { target: 'a.b.c.d/len', iface: <logical name> },
+// from the static config plus (when available) netifd's runtime state, which
+// also covers DHCP-assigned networks and tunnels like a user WireGuard link.
+// `skip` maps interface names to ignore (the nordvpn instances themselves —
+// they all share the fixed NordLynx range).
+function local_subnets(uci, skip) {
+	let out = [];
+	let seen = {};
+	let add = function(name, addr, len) {
+		if (name == 'loopback' || skip[name] || addr == null || len == null || len < 1 || len > 30)
+			return;
+		let ip = ip4_to_int(addr);
+		if (ip == null)
+			return;
+		let mask = (0xffffffff << (32 - len)) & 0xffffffff;
+		let target = sprintf('%s/%d', int_to_ip4(ip & mask), len);
+		if (target == '10.5.0.0/16' || seen[target])
+			return;
+		seen[target] = 1;
+		push(out, { target: target, iface: name });
+	};
+
+	uci.foreach('network', 'interface', function(sec) {
+		if (sec.proto != 'static')
+			return;
+		let addrs = sec.ipaddr;
+		if (type(addrs) != 'array')
+			addrs = (addrs != null) ? [ addrs ] : [];
+		for (let a in addrs) {
+			let m = match('' + a, /^([0-9.]+)\/([0-9]+)$/);
+			if (m)
+				add(sec['.name'], m[1], int(m[2]));
+			else if (sec.netmask)
+				add(sec['.name'], '' + a, mask_len(sec.netmask));
+		}
+	});
+
+	// User static routes in the main table (e.g. a subnet behind their own
+	// WireGuard link, where the interface address is a /32) are local
+	// destinations too — mirror them.
+	uci.foreach('network', 'route', function(sec) {
+		if (sec[MARK] == '1' || (sec.table != null && sec.table != ''))
+			return;
+		let c = route_cidr(sec);
+		if (c) {
+			let m = match(c, /^([0-9.]+)\/([0-9]+)$/);
+			add(sec.interface, m[1], int(m[2]));
+		}
+	});
+
+	// Subnets routed through the user's OWN WireGuard links (peer allowed_ips
+	// with route_allowed_ips) — e.g. services behind a personal wg tunnel.
+	uci.foreach('network', null, function(sec) {
+		if (!sec['.type'] || index(sec['.type'], 'wireguard_') != 0)
+			return;
+		if (sec.route_allowed_ips != '1' || sec.interface == null || skip[sec.interface])
+			return;
+		let ips = sec.allowed_ips;
+		if (type(ips) != 'array')
+			ips = (ips != null) ? [ ips ] : [];
+		for (let a in ips) {
+			let m = match('' + a, /^([0-9.]+)\/([0-9]+)$/);
+			if (m)
+				add(sec.interface, m[1], int(m[2]));
+		}
+	});
+
+	let d = run([ 'ubus', 'call', 'network.interface', 'dump' ]);
+	if (d.code == 0) {
+		let data;
+		try {
+			data = json(d.stdout);
+		} catch (e) {
+			data = null;
+		}
+		for (let ifc in ((data ? data.interface : null) || []))
+			for (let a in (ifc['ipv4-address'] || []))
+				add(ifc.interface, a.address, a.mask);
+	}
+	return out;
+}
+
+// Reconcile the stamped bypass routes of one instance with the desired subnet
+// list. Subnets already covered by an unstamped user route in the same table
+// are left to the user's route. Returns true on change.
+function reconcile_local_routes(uci, iface, table, desired) {
+	let changed = false;
+	let have = [];
+	let covered = {};
+	uci.foreach('network', 'route', function(sec) {
+		if (sec[MARK] == '1' && sec[ROLE] == 'steer_local' && sec.nordvpn_iface == iface) {
+			push(have, { section: sec['.name'], target: sec.target, table: sec.table });
+		} else if (sec[MARK] != '1' && sec.table == table) {
+			let c = route_cidr(sec);
+			if (c)
+				covered[c] = true;
+		}
+	});
+	for (let h in have) {
+		// A user route for the same subnet wins over ours.
+		let keep = (h.table == table) && !covered[h.target];
+		if (keep) {
+			keep = false;
+			for (let d in desired)
+				if (d.target == h.target)
+					keep = true;
+		}
+		if (!keep) {
+			uci.delete('network', h.section);
+			changed = true;
+		}
+	}
+	for (let d in desired) {
+		let present = false;
+		for (let h in have)
+			if (h.target == d.target && h.table == table && !covered[h.target])
+				present = true;
+		if (covered[d.target] || present)
+			continue;
+		let sec = uci.add('network', 'route');
+		uci.set('network', sec, 'interface', d.iface);
+		uci.set('network', sec, 'target', d.target);
+		uci.set('network', sec, 'table', table);
+		uci.set('network', sec, MARK, '1');
+		uci.set('network', sec, ROLE, 'steer_local');
+		uci.set('network', sec, 'nordvpn_iface', iface);
+		changed = true;
+	}
+	return changed;
+}
+
 // netifd resolves named routing tables through /etc/iproute2/rt_tables; an
 // unregistered name makes ip4table and lookup rules silently inert. Register
 // the instance's table with a stamped line (best effort). Numeric tables and
@@ -361,6 +548,19 @@ function enforce(uci, s) {
 	if (reconcile_rules(uci, 'rule6', 'steer_v6', iface, (steer && s.block_ipv6) ? steer_nets : [], function(net) {
 		return { 'in': net, action: 'prohibit', priority: '21000' };
 	}))
+		cn = true;
+
+	// 1c. Bypass routes for local subnets, so the steered default does not
+	//     swallow LAN↔VLAN or LAN↔local-tunnel traffic. The nordvpn instances'
+	//     own interfaces are excluded (they share the fixed NordLynx range).
+	let locals = [];
+	if (steer) {
+		let skip = {};
+		for (let n in _common.list_instances(uci))
+			skip[_common.load_settings(uci, n).interface] = true;
+		locals = local_subnets(uci, skip);
+	}
+	if (reconcile_local_routes(uci, iface, table || '', locals))
 		cn = true;
 
 	// 2. Firewall zone (named after the interface, one per instance) and

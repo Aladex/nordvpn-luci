@@ -214,8 +214,12 @@ To steer only some networks through an instance, pick them under **Steered
 networks** in its Traffic routing panel: the backend maintains stamped policy
 rules (`in <network> lookup <table>`, priority 20000) plus prohibit rules that
 act as a per-network kill switch (optional) and IPv6 leak block (default on) —
-they fire only when the tunnel's table cannot serve the traffic. Or keep using
-your own policy-routing rules (manual mode is detected and left alone).
+they fire only when the tunnel's table cannot serve the traffic. So that the
+steered default does not swallow local destinations, the backend also mirrors
+every local IPv4 subnet into the instance's table (interface subnets, static
+routes and the allowed-IPs of your own WireGuard links; your own routes for
+the same subnet always win). Or keep using your own policy-routing rules
+(manual mode is detected and left alone).
 
 ![VPN instances](docs/screenshots/instances.png)
 

@@ -268,8 +268,11 @@ write_cache(cache, cpath);
 	global.MOCK_UCI = { network: {
 		nordvpn_rs: { '.type': 'interface', proto: 'wireguard', private_key: KEY },
 		peer_rs: { '.type': 'wireguard_nordvpn_rs', interface: 'nordvpn_rs', endpoint_host: 'x.nordvpn.com' },
-		media: { '.type': 'interface', proto: 'static' },
-		guest: { '.type': 'interface', proto: 'static' }
+		media: { '.type': 'interface', proto: 'static', ipaddr: '10.9.1.1', netmask: '255.255.255.0' },
+		guest: { '.type': 'interface', proto: 'static', ipaddr: '10.9.2.1/24' },
+		hetzroute: { '.type': 'route', interface: 'wgx', target: '10.28.0.0', netmask: '255.255.255.0' },
+		wgxpeer: { '.type': 'wireguard_wgx', interface: 'wgx', route_allowed_ips: '1',
+			allowed_ips: [ '10.29.0.0/24', '0.0.0.0/0' ] }
 	}, firewall: {
 		zlan: { '.type': 'zone', name: 'lan', network: [ 'lan' ] },
 		zwan: { '.type': 'zone', name: 'wan', masq: '1', network: [ 'wan' ] },
@@ -296,6 +299,39 @@ write_cache(cache, cpath);
 			lookup = sec;
 	}
 	ok('steer: media lookup rule targets the table', lookup != null && lookup.lookup == 'nv_media');
+
+	// Local subnets get stamped bypass routes in the instance table.
+	let localr = 0;
+	for (let k in global.MOCK_UCI.network) {
+		let sec = global.MOCK_UCI.network[k];
+		if (sec['.type'] == 'route' && sec.nordvpn_role == 'steer_local' && sec.table == 'nv_media')
+			localr++;
+	}
+	eq('steer: local bypass routes created', localr, 4);
+	let mirrored = 0;
+	for (let k in global.MOCK_UCI.network) {
+		let sec = global.MOCK_UCI.network[k];
+		if (sec['.type'] == 'route' && sec.nordvpn_role == 'steer_local' &&
+		    (sec.target == '10.28.0.0/24' || sec.target == '10.29.0.0/24'))
+			mirrored++;
+	}
+	eq('steer: user route and wg allowed_ips mirrored', mirrored, 2);
+
+	// An unstamped user route for the same subnet (netmask form) is respected:
+	// no duplicate is created and an existing stamped twin is withdrawn.
+	global.MOCK_UCI.network.userlocal = { '.type': 'route', interface: 'media',
+		target: '10.9.1.0', netmask: '255.255.255.0', table: 'nv_media' };
+	enforce_routing(uci, ssteer({}));
+	let dup = 0;
+	for (let k in global.MOCK_UCI.network) {
+		let sec = global.MOCK_UCI.network[k];
+		if (sec['.type'] == 'route' && sec.table == 'nv_media' &&
+		    (sec.target == '10.9.1.0/24' || sec.target == '10.9.1.0'))
+			dup++;
+	}
+	eq('steer: user companion route not duplicated', dup, 1);
+	delete global.MOCK_UCI.network.userlocal;
+	enforce_routing(uci, ssteer({}));
 
 	// Reconciliation: switch the steering to another network, kill switch on.
 	res = enforce_routing(uci, ssteer({ source_networks: [ 'guest' ], killswitch: true }));
@@ -334,8 +370,8 @@ write_cache(cache, cpath);
 	global.MOCK_UCI = { network: {
 		nordvpn_rs: { '.type': 'interface', proto: 'wireguard', private_key: KEY },
 		peer_rs: { '.type': 'wireguard_nordvpn_rs', interface: 'nordvpn_rs', endpoint_host: 'x.nordvpn.com' },
-		media: { '.type': 'interface', proto: 'static' },
-		guest: { '.type': 'interface', proto: 'static' }
+		media: { '.type': 'interface', proto: 'static', ipaddr: '10.9.1.1', netmask: '255.255.255.0' },
+		guest: { '.type': 'interface', proto: 'static', ipaddr: '10.9.2.1/24' }
 	}, firewall: {
 		zlan: { '.type': 'zone', name: 'lan', network: [ 'lan' ] },
 		zwan: { '.type': 'zone', name: 'wan', masq: '1', network: [ 'wan' ] },

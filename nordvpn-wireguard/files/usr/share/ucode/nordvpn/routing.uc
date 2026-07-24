@@ -537,8 +537,12 @@ function enforce(uci, s) {
 	let cn = false, cf = false;
 	let iface = s.interface;
 	let det = detect(uci, s, false);
-	let auto = (det.mode == 'auto');
-	let steer = (det.mode == 'steered');
+	// A disabled instance releases all managed objects: an explicit Disable
+	// means "give me normal networking back" (IPv6 included); the next apply
+	// recreates everything. Missing `enabled` (test fixtures) counts as on.
+	let active = (s.enabled == null) ? true : !!s.enabled;
+	let auto = (det.mode == 'auto') && active;
+	let steer = (det.mode == 'steered') && active;
 	if (steer && (s.routing_table == null || s.routing_table == '')) {
 		push(notes, 'steering needs a routing table; set one for this instance');
 		steer = false;

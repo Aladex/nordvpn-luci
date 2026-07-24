@@ -59,12 +59,18 @@ global.MOCK_UCI = { nordvpn: { main: { '.type': 'settings', interface: 'nordvpn'
 	network: { nordvpn: { '.type': 'interface', private_key: KEY } } };
 ok('rotate_now skipped with fixed server', m.rotate_now.call().skipped == true);
 
-// disconnect pauses the instance; clear_credentials forgets the key
-global.MOCK_UCI = { nordvpn: { main: { '.type': 'settings', interface: 'nordvpn', cache_dir: cdir } },
-	network: { nordvpn: { '.type': 'interface', private_key: KEY, auto: '1' } } };
+// disconnect pauses the instance, releases managed routing objects
+global.MOCK_UCI = { nordvpn: { main: { '.type': 'settings', interface: 'nordvpn', enabled: '1',
+	routing_table: 'nvx', source_network: 'lan', cache_dir: cdir } },
+	network: {
+		nordvpn: { '.type': 'interface', private_key: KEY, auto: '1', nordvpn_managed_routing: '1' },
+		steerrule: { '.type': 'rule', 'in': 'lan', lookup: 'nvx',
+			nordvpn_managed: '1', nordvpn_role: 'steer_lookup', nordvpn_iface: 'nordvpn' }
+	}, firewall: {} };
 ok('disconnect ok', m.disconnect.call({}).ok == true);
 eq('disconnect flips master switch off', global.MOCK_UCI.nordvpn.main.enabled, '0');
 eq('disconnect keeps the interface down', global.MOCK_UCI.network.nordvpn.auto, '0');
+ok('disconnect releases steering rules', global.MOCK_UCI.network.steerrule == null);
 ok('clear_credentials ok', m.clear_credentials.call({}).ok == true);
 ok('clear_credentials removes the key', global.MOCK_UCI.network.nordvpn.private_key == null);
 

@@ -235,10 +235,12 @@ function apply_inner(uci, instance) {
 	if (!cache)
 		return { state: 'failure', error: 'server list not available; refresh the cache first' };
 
-	// Applying implies the user wants the instance on — undo a disconnect.
+	// Applying implies the user wants the instance on — undo a disable, both
+	// in the config and in the already-loaded settings the enforcement uses.
 	if (!s.enabled) {
 		uci.set('nordvpn', s.name, 'enabled', '1');
 		uci.commit('nordvpn');
+		s.enabled = true;
 	}
 
 	// Reconcile the managed routing/firewall objects with the settings. Only
@@ -315,8 +317,10 @@ function apply(uci, instance) {
 	return res;
 }
 
-// Take the tunnel down and keep it down (auto '0') until the next apply;
-// also flips the instance's master switch off so scheduled rotation stops.
+// Disable the instance: tunnel down and kept down (auto '0'), scheduled
+// rotation stopped, and every managed routing/firewall object released so the
+// steered networks return to normal networking — IPv6 included. The next
+// apply re-enables and recreates everything.
 function disconnect(uci, instance) {
 	let s = load_settings(uci, instance);
 	let iface = validate_interface(s.interface);
@@ -324,11 +328,26 @@ function disconnect(uci, instance) {
 		return { error: 'invalid interface name' };
 	uci.set('nordvpn', s.name, 'enabled', '0');
 	uci.commit('nordvpn');
+
+	s.enabled = false;
+	let routing = enforce_routing(uci, s);
+	if (routing.changed_firewall) {
+		uci.commit('firewall');
+		run([ '/etc/init.d/firewall', 'reload' ]);
+	}
+	if (routing.changed_network) {
+		uci.commit('network');
+		run([ 'ubus', 'call', 'network', 'reload' ]);
+	}
+	if (routing.changed_network || routing.changed_firewall)
+		uci = cursor();
+
 	if (uci.get('network', iface) != null) {
 		uci.set('network', iface, 'auto', '0');
 		uci.commit('network');
 	}
 	run([ 'ifdown', iface ]);
+	restore_wan_default();
 	return { ok: true, interface: iface };
 }
 

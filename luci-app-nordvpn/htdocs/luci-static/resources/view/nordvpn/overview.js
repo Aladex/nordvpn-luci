@@ -40,6 +40,12 @@ var STYLE = '' +
 	'.nv-seg button{border:0;background:transparent;margin:0;padding:.3em 1.1em;cursor:pointer;font:inherit;color:inherit;line-height:1.3}' +
 	'.nv-seg button+button{border-left:1px solid #0069d6}' +
 	'.nv-seg button.active{background:#0069d6;color:#fff}' +
+	'@media (max-width:800px){' +
+		'.nv-itable .tr.table-titles{display:none!important}' +
+		'.nv-itable .tr{display:flex!important;flex-wrap:wrap;align-items:center;gap:.2em .7em;padding:.45em 0;border-bottom:1px solid var(--border-color-medium,#555)}' +
+		'.nv-itable .td{display:inline-flex!important;align-items:center;width:auto!important;padding:0!important;border:none!important;background:none!important}' +
+		'.nv-itable .td::before{display:none!important}' +
+	'}' +
 	'.nv-token-field>div{display:block;width:100%}' +
 	'.nv-token-field .control-group{display:flex;width:100%}' +
 	'.nv-token-field .control-group input{flex:1 1 auto;width:100%}' +
@@ -138,7 +144,7 @@ return view.extend({
 
 		dom.content(this.instancesNode, E('fieldset', { class: 'cbi-section' }, [
 			E('legend', {}, _('VPN instances')),
-			E('div', { class: 'cbi-section-node' }, [
+			E('div', { class: 'cbi-section-node nv-itable' }, [
 				E('table', { class: 'table' }, rows),
 				E('div', { style: 'margin-top:.5em' }, [
 					E('button', { class: 'cbi-button cbi-button-add', click: L.bind(this.showAddInstanceModal, this) },
@@ -347,7 +353,7 @@ return view.extend({
 							class: 'cbi-button cbi-button-remove',
 							disabled: (!s.configured || s.state === 'disconnected' || s.state === 'not_configured') || null,
 							click: L.bind(this.disconnect, this)
-						}, _('Disconnect'))
+						}, _('Disable'))
 					])
 				])
 			])
@@ -404,17 +410,17 @@ return view.extend({
 	},
 
 	disconnect: function() {
-		var n = this.notice(_('Disconnecting…'), 'info');
+		var n = this.notice(_('Disabling…'), 'info');
 		return callDisconnect(this.instance).then(L.bind(function(res) {
 			this.dismiss(n);
 			if (res && res.error)
-				this.notice(_('Disconnect failed: %s').format(res.error), 'error');
+				this.notice(_('Disable failed: %s').format(res.error), 'error');
 			else
-				this.notice(_('Disconnected. Automatic rotation is paused until the next connect.'), 'info', 5000);
+				this.notice(_('Instance disabled: its networks are back on normal routing (IPv6 included). Reconnect restores the VPN.'), 'info', 6000);
 			return this.refreshStatus();
 		}, this)).catch(L.bind(function(e) {
 			this.dismiss(n);
-			this.notice(_('Disconnect failed: %s').format(e), 'error');
+			this.notice(_('Disable failed: %s').format(e), 'error');
 		}, this));
 	},
 

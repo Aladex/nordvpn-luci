@@ -31,6 +31,14 @@ var STYLE = '' +
 	'.nv-radio-group{display:flex;align-items:center;gap:1.25em;flex-wrap:wrap;min-height:1.9em}' +
 	'.nv-radio-group label{display:inline-flex;align-items:center;gap:.4em;margin:0;font-weight:normal}' +
 	'.nv-check{display:inline-flex;align-items:center;gap:.4em;font-weight:normal}' +
+	'.nv-switch{position:relative;display:inline-block;width:2.7em;height:1.45em;flex:none;margin:0}' +
+	'.nv-switch input{opacity:0;width:0;height:0;position:absolute}' +
+	'.nv-slider{position:absolute;inset:0;background:#bbb;border-radius:1.45em;transition:.2s;cursor:pointer}' +
+	'.nv-slider:before{content:"";position:absolute;height:1.1em;width:1.1em;left:.2em;top:50%;transform:translateY(-50%);background:#fff;border-radius:50%;transition:.2s;box-shadow:0 1px 2px rgba(0,0,0,.35)}' +
+	'.nv-switch input:checked+.nv-slider{background:#0069d6}' +
+	'.nv-switch input:checked+.nv-slider:before{left:calc(100% - 1.3em)}' +
+	'.nv-switch-side{cursor:pointer}' +
+	'.nv-dim{color:var(--text-color-medium,#999)}' +
 	'.nv-token-field>div{display:block;width:100%}' +
 	'.nv-token-field .control-group{display:flex;width:100%}' +
 	'.nv-token-field .control-group input{flex:1 1 auto;width:100%}' +
@@ -251,9 +259,11 @@ return view.extend({
 		this.serverSel = E('select', { class: 'cbi-input-select', change: L.bind(this.onServerChange, this), disabled: true });
 
 		var hop = uci.get('nordvpn', 'main', 'hop_mode') || 'single';
-		this.hopSingle = E('input', { type: 'radio', name: 'nv-hop', value: 'single', change: L.bind(this.onHopChange, this) });
-		this.hopMulti = E('input', { type: 'radio', name: 'nv-hop', value: 'multihop', change: L.bind(this.onHopChange, this) });
-		(hop === 'multihop' ? this.hopMulti : this.hopSingle).checked = true;
+		this.hopToggle = E('input', { type: 'checkbox', change: L.bind(this.onHopChange, this) });
+		this.hopToggle.checked = (hop === 'multihop');
+		this.hopSingleLbl = E('span', { class: 'nv-switch-side', click: L.bind(this.setHopMode, this, false) }, _('Single hop'));
+		this.hopMultiLbl = E('span', { class: 'nv-switch-side', click: L.bind(this.setHopMode, this, true) }, _('Multihop'));
+		this.updateHopLabels();
 
 		this.locNote = E('div', { class: 'cbi-value-description hidden' });
 
@@ -262,9 +272,10 @@ return view.extend({
 			E('div', { class: 'cbi-section-node' }, [
 				this.row(_('Credentials'), [ E('div', { class: 'nv-inline' }, [ credState, credBtn ]) ]),
 				this.row(_('Hop mode'), [
-					E('div', { class: 'nv-radio-group' }, [
-						E('label', {}, [ this.hopSingle, _('Single hop') ]),
-						E('label', {}, [ this.hopMulti, _('Multihop') ])
+					E('div', { class: 'nv-inline', style: 'gap:.6em;min-height:1.9em' }, [
+						this.hopSingleLbl,
+						E('label', { class: 'nv-switch' }, [ this.hopToggle, E('span', { class: 'nv-slider' }) ]),
+						this.hopMultiLbl
 					])
 				]),
 				this.row(_('Country'), [ this.countrySel, this.locNote ]),
@@ -414,7 +425,20 @@ return view.extend({
 	/* ---- selection ---------------------------------------------------- */
 
 	hopMode: function() {
-		return this.hopMulti && this.hopMulti.checked ? 'multihop' : 'single';
+		return this.hopToggle && this.hopToggle.checked ? 'multihop' : 'single';
+	},
+
+	setHopMode: function(multi) {
+		if (this.hopToggle && this.hopToggle.checked !== multi) {
+			this.hopToggle.checked = multi;
+			this.onHopChange();
+		}
+	},
+
+	updateHopLabels: function() {
+		var multi = (this.hopMode() === 'multihop');
+		if (this.hopSingleLbl) this.hopSingleLbl.classList.toggle('nv-dim', multi);
+		if (this.hopMultiLbl) this.hopMultiLbl.classList.toggle('nv-dim', !multi);
 	},
 
 	filteredCountries: function() {
@@ -514,6 +538,7 @@ return view.extend({
 
 	onHopChange: function() {
 		this.markDirty();
+		this.updateHopLabels();
 		this.populateCountries();
 	},
 

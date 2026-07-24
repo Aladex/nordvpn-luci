@@ -36,8 +36,8 @@ var STYLE = '' +
 	'.nv-radio-group{display:flex;align-items:center;gap:1.25em;flex-wrap:wrap;min-height:1.9em}' +
 	'.nv-radio-group label{display:inline-flex;align-items:center;gap:.4em;margin:0;font-weight:normal}' +
 	'.nv-check{display:inline-flex;align-items:center;gap:.4em;font-weight:normal}' +
-	'.nv-seg{display:inline-flex;border:1px solid #0069d6;border-radius:1.2em;overflow:hidden}' +
-	'.nv-seg button{border:0;background:transparent;margin:0;padding:.3em 1.1em;cursor:pointer;font:inherit;color:inherit;line-height:1.3}' +
+	'.nv-seg{display:inline-flex;flex-wrap:wrap;max-width:100%;border:1px solid #0069d6;border-radius:1.2em;overflow:hidden}' +
+	'.nv-seg button{border:0;background:transparent;margin:0;padding:.3em 1.1em;cursor:pointer;font:inherit;color:inherit;line-height:1.3;white-space:nowrap;flex:1 1 auto}' +
 	'.nv-seg button+button{border-left:1px solid #0069d6}' +
 	'.nv-seg button.active{background:#0069d6;color:#fff}' +
 	'@media (max-width:800px){' +

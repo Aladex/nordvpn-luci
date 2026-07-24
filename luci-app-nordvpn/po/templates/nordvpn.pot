@@ -1,0 +1,7 @@
+msgid ""
+msgstr "Content-Type: text/plain; charset=UTF-8\n"
+
+# This template is regenerated from the sources with:
+#   ./build/i18n-scan.pl applications/luci-app-nordvpn \
+#       > applications/luci-app-nordvpn/po/templates/nordvpn.pot
+# Do not hand-edit translated .po files; upstream translations use Weblate.

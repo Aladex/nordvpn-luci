@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright 2026 Andrey Aleksandrov <aladex@gmail.com>
+
+include $(TOPDIR)/rules.mk
+
+PKG_MAINTAINER:=Andrey Aleksandrov <aladex@gmail.com>
+PKG_LICENSE:=0BSD
+
+LUCI_TITLE:=LuCI support for NordVPN WireGuard
+LUCI_DESCRIPTION:=Web interface for the NordVPN WireGuard backend (nordvpn-wireguard): \
+	runtime status, one-time credential setup, server selection, automatic \
+	rotation and cache management. Unofficial; not affiliated with Nord Security.
+LUCI_DEPENDS:=+luci-base +nordvpn-wireguard
+LUCI_PKGARCH:=all
+
+include ../../luci.mk
+
+# call BuildPackage - OpenWrt buildroot signature

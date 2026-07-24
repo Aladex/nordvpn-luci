@@ -1,0 +1,17 @@
+{
+	"luci-app-nordvpn": {
+		"description": "Grant access to NordVPN status, configuration and control",
+		"read": {
+			"ubus": {
+				"nordvpn": [ "status", "locations", "refresh_status" ]
+			},
+			"uci": [ "nordvpn" ]
+		},
+		"write": {
+			"ubus": {
+				"nordvpn": [ "set_credentials", "apply", "refresh_locations", "rotate_now" ]
+			},
+			"uci": [ "nordvpn" ]
+		}
+	}
+}

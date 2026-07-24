@@ -193,30 +193,38 @@ function connect_one(uci, iface, relay, s) {
 // installed, cutting WAN connectivity. Self-heal: when the kernel lost the
 // default but netifd claims a gateway route on an up interface, re-add it.
 function restore_wan_default() {
-	let r = run([ 'ip', '-4', 'route', 'show', 'default' ]);
-	if (r.code != 0 || length(trim(r.stdout || '')) > 0)
-		return false;
-	let d = run([ 'ubus', 'call', 'network.interface', 'dump' ]);
-	if (d.code != 0)
-		return false;
-	let data;
-	try {
-		data = json(d.stdout);
-	} catch (e) {
-		return false;
-	}
-	for (let ifc in ((data ? data.interface : null) || [])) {
-		if (!ifc.up || !ifc.l3_device)
+	// The reload applies asynchronously; the route can disappear a moment
+	// after an immediate check passes, so probe a few times.
+	for (let attempt = 0; attempt < 3; attempt++) {
+		run([ 'sleep', '2' ]);
+		let r = run([ 'ip', '-4', 'route', 'show', 'default' ]);
+		if (r.code != 0)
+			return false;
+		if (length(trim(r.stdout || '')) > 0)
 			continue;
-		for (let rt in (ifc.route || [])) {
-			if (rt.target == '0.0.0.0' && rt.mask == 0 && rt.nexthop && rt.nexthop != '0.0.0.0') {
-				let res = run([ 'ip', 'route', 'add', 'default', 'via', rt.nexthop, 'dev', ifc.l3_device ]);
-				_common.log('restored missing WAN default route via ' + rt.nexthop + ' on ' + ifc.l3_device);
-				return res.code == 0;
+		let d = run([ 'ubus', 'call', 'network.interface', 'dump' ]);
+		if (d.code != 0)
+			return false;
+		let data;
+		try {
+			data = json(d.stdout);
+		} catch (e) {
+			return false;
+		}
+		for (let ifc in ((data ? data.interface : null) || [])) {
+			if (!ifc.up || !ifc.l3_device)
+				continue;
+			for (let rt in (ifc.route || [])) {
+				if (rt.target == '0.0.0.0' && rt.mask == 0 && rt.nexthop && rt.nexthop != '0.0.0.0') {
+					let res = run([ 'ip', 'route', 'add', 'default', 'via', rt.nexthop, 'dev', ifc.l3_device ]);
+					_common.log('restored missing WAN default route via ' + rt.nexthop + ' on ' + ifc.l3_device);
+					if (res.code != 0)
+						return false;
+				}
 			}
 		}
 	}
-	return false;
+	return true;
 }
 
 // Apply the persisted configuration. A fixed server is applied once; an

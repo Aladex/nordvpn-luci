@@ -18,9 +18,9 @@ config settings 'main'
 	option rotation_mode 'interval'
 	option rotation_interval '360'
 	option rotation_time '04:30'
-	# Connectivity test tuning for rotation.
-	option ping_count '10'
-	option ping_timeout '2'
+	# Seconds to wait for a WireGuard handshake when verifying a server, and
+	# how many candidate servers a rotation may try before giving up.
+	option verify_timeout '8'
 	option max_retries '10'
 	# Server-list cache directory (empty = /tmp) and background refresh period.
 	option cache_dir ''

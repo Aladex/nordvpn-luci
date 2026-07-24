@@ -39,6 +39,8 @@ const MIN_ROTATION_INTERVAL = 5;      // minutes
 const MAX_ROTATION_INTERVAL = 44640;  // 31 days
 const MIN_CACHE_REFRESH = 60;         // seconds
 const MAX_CACHE_REFRESH = 604800;     // 7 days
+const MIN_VERIFY_TIMEOUT = 2;         // seconds to wait for a handshake
+const MAX_VERIFY_TIMEOUT = 30;
 
 // ── Primitive validators ─────────────────────────────────────────────
 // Each returns a normalized value or null; callers treat null as invalid.
@@ -185,8 +187,7 @@ function load_settings(uci) {
 		rotation_mode: validate_rotation_mode(g('rotation_mode', 'interval')) || 'interval',
 		rotation_interval: bi('rotation_interval', '360', MIN_ROTATION_INTERVAL, MAX_ROTATION_INTERVAL),
 		rotation_time: validate_time(g('rotation_time', '04:30')) || '04:30',
-		ping_count: bi('ping_count', '10', 1, 60),
-		ping_timeout: bi('ping_timeout', '2', 1, 60),
+		verify_timeout: bi('verify_timeout', '8', MIN_VERIFY_TIMEOUT, MAX_VERIFY_TIMEOUT),
 		max_retries: bi('max_retries', '10', 1, 50),
 		cache_dir: g('cache_dir', ''),
 		cache_refresh_interval: bi('cache_refresh_interval', '21600', MIN_CACHE_REFRESH, MAX_CACHE_REFRESH),
@@ -306,21 +307,6 @@ function run(argv) {
 	return { code: code, stdout: out };
 }
 
-// Connectivity test bound to the VPN device so it traverses the tunnel even
-// with a custom routing table. Succeeds when >= 70% of pings reach the target.
-function ping_through(iface, count, timeout, target) {
-	count = count || 10;
-	timeout = timeout || 2;
-	target = target || '8.8.8.8';
-	let ok = 0;
-	for (let i = 0; i < count; i++) {
-		let r = run([ 'ping', '-c', '1', '-W', '' + timeout, '-I', iface, target ]);
-		if (r.code == 0)
-			ok++;
-	}
-	return (ok * 10) >= (count * 7);
-}
-
 // CommonJS export (ucode on OpenWrt 24.10 does not support ES `export`).
 return {
 	VERSION, API_BASE, CREDS_URL, SERVERS_URL,
@@ -328,9 +314,10 @@ return {
 	CACHE_FILENAME, DEFAULT_CACHE_DIR, FETCH_STATUS_FILE, CACHE_LOCK_FILE,
 	CACHE_MAX_AGE, CACHE_SCHEMA_VERSION, PAGE_SIZE, MAX_PAGES,
 	MIN_ROTATION_INTERVAL, MAX_ROTATION_INTERVAL, MIN_CACHE_REFRESH, MAX_CACHE_REFRESH,
+	MIN_VERIFY_TIMEOUT, MAX_VERIFY_TIMEOUT,
 	bounded_int, validate_interface, validate_token, validate_wg_key, validate_hostname,
 	validate_port, validate_hop_mode, validate_rotation_mode, validate_interval, validate_time,
 	validate_country_code, validate_location_code, validate_routing_table, validate_dir,
 	load_settings, cache_file_path, iso_ts, redact, log,
-	atomic_write, acquire_lock, release_lock, sh_quote, open_cmd, run, ping_through
+	atomic_write, acquire_lock, release_lock, sh_quote, open_cmd, run
 };

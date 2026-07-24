@@ -114,7 +114,7 @@ function rotate_inner(uci) {
 		// Verify the tunnel by its WireGuard handshake, not by a ping routed
 		// through it: NordVPN publishes dead endpoints, and a routed ping can
 		// fail on a perfectly good server, which made rotation cycle servers.
-		if (verify_handshake(iface, 5)) {
+		if (verify_handshake(iface, s.verify_timeout)) {
 			record({ last_success: time(), server: relay.hostname });
 			log('rotated to ' + relay.hostname);
 			return { ok: true, server: relay.hostname };

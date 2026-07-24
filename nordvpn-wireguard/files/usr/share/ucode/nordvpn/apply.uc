@@ -203,7 +203,7 @@ function apply(uci) {
 		if (!relay)
 			return { state: 'failure', error: 'configured server not found in cache' };
 		let up = connect_one(uci, iface, relay, s);
-		let ok = up && verify_handshake(iface, 6);
+		let ok = up && verify_handshake(iface, s.verify_timeout);
 		return {
 			state: ok ? 'success' : (up ? 'partial_failure' : 'failure'),
 			interface: iface, gateway: relay.hostname,
@@ -225,7 +225,7 @@ function apply(uci) {
 		let relay = list[i];
 		if (!connect_one(uci, iface, relay, s))
 			continue;
-		if (verify_handshake(iface, 4))
+		if (verify_handshake(iface, s.verify_timeout))
 			return {
 				state: 'success', interface: iface, gateway: relay.hostname,
 				endpoint: relay.hostname + ':' + (relay.port || DEFAULT_PORT),

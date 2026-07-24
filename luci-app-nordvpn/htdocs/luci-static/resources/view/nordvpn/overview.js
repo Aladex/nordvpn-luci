@@ -42,11 +42,12 @@ var STYLE = '' +
 	'.nv-seg button.active{background:#0069d6;color:#fff}' +
 	// Plain flex rows (no LuCI .table classes), so the theme's own responsive
 	// table stacking can never apply; wraps naturally down to ~340 px.
-	'.nv-inst-row{display:flex;flex-wrap:wrap;align-items:center;gap:.25em .8em;padding:.55em 0;border-bottom:1px solid var(--border-color-medium,#ccc);cursor:pointer}' +
+	'.nv-inst-row{display:flex;align-items:center;gap:.8em;padding:.55em 0;border-bottom:1px solid var(--border-color-medium,#ccc);cursor:pointer}' +
 	'.nv-inst-row:last-child{border-bottom:none}' +
+	'.nv-inst-info{display:flex;flex-wrap:wrap;align-items:center;gap:.25em .8em;flex:1;min-width:0}' +
 	'.nv-inst-name{font-weight:bold}' +
 	'.nv-inst-dim{color:var(--text-color-medium,#666);font-size:.92em}' +
-	'.nv-inst-act{margin-left:auto}' +
+	'.nv-inst-act{flex:none;margin-left:auto}' +
 	'.nv-token-field>div{display:block;width:100%}' +
 	'.nv-token-field .control-group{display:flex;width:100%}' +
 	'.nv-token-field .control-group input{flex:1 1 auto;width:100%}' +
@@ -125,10 +126,12 @@ return view.extend({
 				class: 'nv-inst-row',
 				click: L.bind(this.selectInstance, this, st.instance)
 			}, [
-				E('span', { class: 'nv-inst-name' }, (selected ? '▸ ' : '') + st.instance),
-				E('span', { style: 'color:' + info.color }, info.label),
-				E('span', {}, (flag ? flag + ' ' : '') + (st.gateway || '—')),
-				next ? E('span', { class: 'nv-inst-dim' }, '⟳ ' + next) : '',
+				E('div', { class: 'nv-inst-info' }, [
+					E('span', { class: 'nv-inst-name' }, (selected ? '▸ ' : '') + st.instance),
+					E('span', { style: 'color:' + info.color }, info.label),
+					E('span', {}, (flag ? flag + ' ' : '') + (st.gateway || '—')),
+					next ? E('span', { class: 'nv-inst-dim' }, '⟳ ' + next) : ''
+				]),
 				E('span', { class: 'nv-inst-act' }, E('button', {
 					class: 'cbi-button cbi-button-remove',
 					click: L.bind(this.showDeleteInstanceModal, this, st.instance)

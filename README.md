@@ -1,185 +1,204 @@
-# NordVPN LuCI Module
+# NordVPN WireGuard for OpenWrt
 
-Web interface for configuring NordVPN WireGuard on OpenWrt/LuCI with automatic server rotation and custom routing tables. Ships as a standard OpenWrt package (`luci-app-nordvpn`) with procd services.
+Configure NordVPN's WireGuard (NordLynx) service on OpenWrt, with a one-time
+credential exchange, country/city/server selection, automatic rotation, custom
+routing tables and a native LuCI page.
 
-## Features
+> **Unofficial.** This project is not affiliated with, endorsed by, or supported
+> by Nord Security. "NordVPN" and "NordLynx" are trademarks of their respective
+> owners. Use your own NordVPN account and access token.
 
-- **Token-based authentication**: Enter a 64-char access token once — the module generates a private WireGuard key via the NordVPN API. The token is not stored; only the private key is saved in UCI.
-- **Fixed tunnel address**: Uses the standard `10.5.0.2/16` address for all users.
-- **Server selection**: Country → city → server, with per-server load info. Multihop (double VPN) servers are supported via a hop-mode toggle.
-- **Server list caching**: The full server list is fetched once (paginated, with progress shown in the UI) and cached locally; the `nordvpn-cache` service keeps it fresh in the background.
-- **Auto rotation**: The `nordvpn-rotate` service rotates to a random server on a schedule — either every N minutes or daily at a fixed HH:MM time. Rotation scope follows your selection (whole country or a specific city).
-- **Connectivity testing**: After each rotation the script pings through the tunnel and retries with another server if the connection is dead (configurable ping count, timeout and max attempts).
-- **Custom routing tables**: Route VPN traffic through a separate routing table (`ip4table`/`ip6table`) for policy-based routing.
-- **Native LuCI design**: Matches the standard OpenWrt interface.
+## Architecture
+
+The project ships as **two packages** so the VPN service is useful without a web
+interface and the LuCI app stays a thin frontend:
+
+- **`nordvpn-wireguard`** — the backend (targets `openwrt/packages`,
+  `net/nordvpn-wireguard`). ucode + procd + an rpcd/ubus object. Does credential
+  exchange, server-list caching, WireGuard interface/peer generation,
+  connectivity checks, scheduled rotation and runtime status. Works from the CLI
+  and over ubus with no LuCI installed.
+- **`luci-app-nordvpn`** — the LuCI frontend (targets `openwrt/luci`,
+  `applications/luci-app-nordvpn`). A JavaScript view that calls the backend's
+  ubus methods. Performs no privileged filesystem or network-config operations
+  itself.
+
+The browser never receives the access token or the WireGuard private key.
 
 ## Repository layout
 
 ```
-Makefile                           # OpenWrt package definition (luci.mk)
-luasrc/controller/nordvpn.lua      # LuCI controller (UI backend + JSON API)
-luasrc/nordvpn/cache.lua           # Shared server-list cache logic
-luasrc/view/nordvpn/overview.htm   # LuCI view template
-root/usr/bin/nordvpn-rotate        # Rotation worker (called by the service)
-root/usr/bin/nordvpn-cache-update  # One-shot cache refresh (called by the service)
-root/etc/init.d/nordvpn-rotate     # procd service: rotation scheduler
-root/etc/init.d/nordvpn-cache      # procd service: cache refresher
-root/etc/config/nordvpn            # Default UCI config
-install.sh                         # Manual (scp/ssh) installer, no package build needed
+nordvpn-wireguard/                         # backend package (packages feed)
+├── Makefile
+├── test.sh                                # CI version smoke test
+├── files/etc/config/nordvpn               # non-secret settings (owns config)
+├── files/etc/init.d/nordvpn               # consolidated procd service
+├── files/etc/uci-defaults/90-nordvpn-migrate
+├── files/usr/bin/nordvpn-service          # uloop scheduler daemon
+├── files/usr/bin/nordvpn-cache-update     # one-shot cache worker
+├── files/usr/bin/nordvpn-rotate           # one-shot rotation worker
+├── files/usr/share/rpcd/ucode/nordvpn.uc  # ubus object 'nordvpn'
+├── files/usr/share/ucode/nordvpn/*.uc     # shared ucode modules
+└── tests/                                 # offline ucode fixture/unit tests
+
+luci-app-nordvpn/                          # LuCI frontend (luci feed)
+├── Makefile
+├── htdocs/luci-static/resources/view/nordvpn/overview.js
+├── po/templates/nordvpn.pot
+└── root/usr/share/{luci/menu.d,rpcd/acl.d}/luci-app-nordvpn.json
 ```
+
+## Supported releases
+
+- **Primary:** current OpenWrt master / snapshots (uses `apk`).
+- **Secondary:** OpenWrt 25.12 where APIs and dependencies match.
+- Older releases only via a separately maintained downstream build.
 
 ## Installation
 
-### As an ipk package (recommended)
+### From a package feed / snapshot build
 
-Build with the OpenWrt SDK:
-
-```bash
-git clone https://github.com/Aladex/nordvpn-luci.git package/luci-app-nordvpn
-./scripts/feeds update -a
-./scripts/feeds install -a
-make package/luci-app-nordvpn/compile
-```
-
-The package lands in `bin/packages/*/luci_app_nordvpn/`. Copy it to the router and install:
+Build with the OpenWrt SDK for your target. The backend is a plain packages-feed
+package; the LuCI app builds inside an `openwrt/luci` checkout.
 
 ```bash
-opkg install luci-app-nordvpn_1.0.0-1_all.ipk
+# backend (packages feed style)
+cp -r nordvpn-wireguard "$SDK/package/nordvpn-wireguard"
+cd "$SDK" && ./scripts/feeds update -a && ./scripts/feeds install -a
+make defconfig
+make package/nordvpn-wireguard/compile
+
+# frontend (from an openwrt/luci checkout)
+cp -r luci-app-nordvpn openwrt-luci/applications/luci-app-nordvpn
+# build via the luci feed as usual
 ```
 
-The postinst enables and starts both services and clears the LuCI cache.
-
-**Note**: use the 24.10.x SDK for opkg-based systems (produces `.ipk`). OpenWrt 25.x switched to apk — building with the 25.12 SDK works too and produces an `.apk` instead.
-
-### Manually
+Install the resulting packages on the router:
 
 ```bash
-./install.sh 192.168.1.1 root
+apk add ./nordvpn-wireguard-*.apk ./luci-app-nordvpn-*.apk   # 25.x / snapshots
+# or: opkg install ./nordvpn-wireguard_*.ipk ./luci-app-nordvpn_*.ipk   # 24.10
 ```
+
+Installing `nordvpn-wireguard` alone gives a working CLI/service; add
+`luci-app-nordvpn` for the web UI.
 
 ## Usage
 
-1. Open LuCI: `https://<router>/cgi-bin/luci`
-2. Navigate to **VPN → NordVPN**
-3. Configure:
-   - **Interface Name**: default `nordvpn`
-   - **Routing Table**: optional custom table name (leave empty for `main`)
-   - **Access Token**: your 64-character hex NordVPN token (one-time use)
-   - **Server Selection**: country → city → server, or leave random
-   - **Auto Rotation**: enable and pick a schedule
-4. The private key is generated automatically via the API; the tunnel address is fixed at `10.5.0.2/16`.
-5. Click **Apply Configuration** — the module creates the WireGuard interface if missing, writes the peer config and restarts the interface.
+1. Open LuCI → **VPN → NordVPN**.
+2. Click **Set credentials** and paste your 64-character NordVPN access token.
+   It is exchanged once for the WireGuard private key and is **never stored**.
+3. Pick **Country** (required), optionally **City** and **Server**. Leave City
+   and Server on *Automatic* to rotate within the country.
+4. Optionally enable **Automatic rotation** and a schedule.
+5. Click **Save and reconnect**.
 
-**Note**: The token is never stored; only the generated private key is kept in UCI.
+Get a token at
+<https://my.nordaccount.com/dashboard/nordvpn/manual-configuration/> →
+**Generate new token** (a non-expiring token is fine).
 
-### Getting a NordVPN access token
+A saved configuration and an established tunnel are shown as **different
+states** — the page never claims "Connected" just because settings were saved.
 
-Log in at https://my.nordaccount.com/dashboard/nordvpn/manual-configuration/ → **Generate new token** and copy it (you can choose a non-expiring token).
+## Configuration (`/etc/config/nordvpn`)
 
-## Services
+The backend owns non-secret settings here; a fresh install ships **disabled**.
 
-Two procd services are installed and enabled by default:
+```
+config settings 'main'
+	option enabled '0'
+	option interface 'nordvpn'
+	option routing_table ''
+	option hop_mode 'single'          # or 'multihop'
+	option country_code 'ee'
+	option city_code 'ee-tallinn'
+	option fixed_server ''            # pin a gateway; disables rotation
+	option rotation_enabled '0'
+	option rotation_mode 'interval'  # or 'time'
+	option rotation_interval '360'   # minutes
+	option rotation_time '04:30'     # HH:MM, router local time
+	option ping_count '10'
+	option ping_timeout '2'
+	option max_retries '10'
+	option cache_dir ''              # empty = /tmp
+	option cache_refresh_interval '21600'
+```
+
+The generated WireGuard interface/peer live in `/etc/config/network` and are
+backend-owned. The private key is stored there for netifd but never appears in
+any status/ubus response.
+
+## ubus API
+
+All methods are on the `nordvpn` object. Read methods never mutate; secrets are
+never returned.
 
 ```bash
-service nordvpn-cache status     # background server-list cache refresh
-service nordvpn-rotate status    # rotation scheduler
-
-logread -e nordvpn-cache         # cache refresh logs
-logread -e nordvpn-rotate        # rotation logs
+ubus call nordvpn status            # runtime state, location, handshake age
+ubus call nordvpn locations         # cached country/city/server list
+ubus call nordvpn refresh_status    # cache-refresh job progress
+ubus call nordvpn set_credentials '{"token":"<64-hex-token>"}'
+ubus call nordvpn apply             # rebuild the peer and bring the tunnel up
+ubus call nordvpn rotate_now        # one-shot rotation
+ubus call nordvpn refresh_locations # start an async server-list refresh
 ```
 
-The rotation service reads the schedule directly from UCI on every iteration — changes applied in the UI take effect without a service restart. Cron entries installed by older cron-based versions of this module are removed automatically on service start.
+Access is gated by the `luci-app-nordvpn` ACL: read methods for read sessions,
+write methods for write sessions. A read-only LuCI account cannot call the write
+methods, and the raw private key is not reachable through UCI or ubus.
 
-## Auto Rotation
+## Services and logs
 
-1. **Enable Auto Rotation** in the UI.
-2. **Choose a schedule**:
-   - *Interval*: rotate every N minutes.
-   - *Time*: rotate daily at a specific HH:MM (router local time).
-3. **Rotation scope**:
-   - Country only: rotates across all servers in the country.
-   - Country + city: rotates within the city.
-   - Specific server: rotation is disabled (fixed server).
-
-When a rotation is due, the service runs `/usr/bin/nordvpn-rotate <interface>`. The worker fetches a fresh server list, picks a random server within the configured scope, updates the peer, restarts the interface, then pings `8.8.8.8` through the tunnel. If fewer than 70% of pings succeed, it retries with another server (up to `nordvpn_max_retries` attempts).
-
-Relevant UCI options on the interface (all optional, with defaults):
-
-```
-option nordvpn_rotation_enabled '1'
-option nordvpn_rotation_mode 'interval'    # or 'time'
-option nordvpn_rotation_interval '360'     # minutes
-option nordvpn_rotation_time '04:30'       # HH:MM
-option nordvpn_country_code 'ee'
-option nordvpn_city_code 'ee-tallinn'
-option nordvpn_hop_mode 'single'           # or 'multihop'
-option nordvpn_ping_count '10'
-option nordvpn_ping_timeout '2'
-option nordvpn_max_retries '10'
+```bash
+service nordvpn status
+service nordvpn version        # installed version
+logread -e nordvpn
 ```
 
-## Server list cache
+One procd-supervised daemon (`nordvpn-service`) refreshes the cache and runs
+scheduled rotation, re-reading `/etc/config/nordvpn` on every tick; a config
+reload restarts it. Scheduled rotation runs `nordvpn-rotate`, which picks a
+server within your selection, updates the peer, then pings through the tunnel
+(bound to the VPN device) and retries another server if the link is dead — up to
+`max_retries`. A failed rotation restores the last working peer.
 
-The controller caches the full WireGuard server list in `nordvpn_servers_cache.json` (default directory `/tmp`, configurable in the UI — stored as `nordvpn_cache_dir` on the interface). The locations page is served from this cache; a manual **Refresh** forces a re-fetch with progress tracking.
+## Custom routing tables
 
-The `nordvpn-cache` service refreshes the cache every 6 hours by default. Change the interval in `/etc/config/nordvpn`:
+Set **Routing table** (Advanced) to route VPN traffic through a separate table
+(`ip4table`/`ip6table` on the interface), then add rules under
+**Network → Routing → Policy Routing**.
 
+## Security
+
+- The access token is exchanged for the private key through an anonymous pipe
+  (curl reads it from a config on `/proc/self/fd`); it never appears in argv, an
+  environment variable, a temp file, or logs, and is never persisted.
+- Every external command runs as an argv array (no shell), so interface names,
+  hostnames, schedules and cache paths cannot inject shell syntax.
+- All ubus inputs have a fixed schema and are range/format validated.
+- Cache writes are atomic (temp file + rename) and refreshes are serialized by a
+  lock; a failed refresh keeps the last good cache.
+
+## Upgrade / downgrade
+
+Upgrading from the legacy Lua `luci-app-nordvpn` runs a one-time, idempotent
+migration (`uci-defaults`) that copies non-secret settings into
+`/etc/config/nordvpn`, preserves the existing private key and active peer,
+removes any stored token, and drops old cron entries. It does not disconnect a
+working tunnel. Downgrading to the legacy Lua package is not supported (the new
+config layout is not read by it).
+
+## Development
+
+Offline ucode tests (no account or network needed):
+
+```bash
+# with ucode + ucode-mod-fs + ucode-mod-math available
+sh nordvpn-wireguard/tests/run.sh
 ```
-config settings 'settings'
-	option cache_refresh_interval '21600'    # seconds
-```
 
-## Custom Routing Tables
-
-1. Enter a routing table name (e.g. `vpn_table`) in the **Routing Table** field.
-2. The module sets `ip4table` and `ip6table` on the interface.
-3. Configure rules in **Network → Routing → Policy Routing**.
-
-Example:
-
-```
-config interface 'nordvpn'
-	option proto 'wireguard'
-	option ip4table 'vpn_table'
-	option ip6table 'vpn_table'
-	...
-
-config rule
-	option src '192.168.1.0/24'
-	option lookup 'vpn_table'
-```
-
-## API Endpoints
-
-All under `/cgi-bin/luci/admin/vpn/nordvpn`:
-
-- `GET /` — web interface
-- `GET /status?interface=nordvpn` — current config incl. private key (JSON)
-- `GET /config?interface=nordvpn` — current config without private key (JSON)
-- `GET /locations` — cached server list (JSON)
-- `GET /locations_refresh` — force re-fetch from the API
-- `GET /locations_progress` — fetch progress state (JSON)
-- `GET /locations_progress_reset` — reset progress state
-- `POST /apply` — apply configuration (JSON payload with token or private_key, relay, rotation settings)
-- `GET|POST /settings` — read/update cache directory settings
-
-## Requirements
-
-- OpenWrt with LuCI
-- WireGuard: `opkg install luci-proto-wireguard kmod-wireguard`
-- `openssl` for Base64: `opkg install openssl-util`
-- `curl` (used for authenticated API calls)
-- `luci-lib-jsonc` for JSON parsing
-
-All of the above except the kernel module are pulled in automatically as package dependencies.
-
-## Troubleshooting
-
-- **Token validation fails**: ensure exactly 64 hex chars and a valid, unexpired NordVPN token.
-- **No servers in the list**: wait for the background fetch or hit **Refresh**; check `logread -e nordvpn-cache` for fetch errors.
-- **Rotation not working**: check `logread -e nordvpn-rotate`, verify the service is running (`service nordvpn-rotate status`), or run `/usr/bin/nordvpn-rotate nordvpn` manually to see full output.
-- **Private key not set**: the token must generate a valid 44-char base64 key — re-enter a fresh token.
-- **JSON errors**: install `luci-lib-jsonc`.
+CI runs shell/JSON static checks, LuCI ESLint on the JS view, the ucode tests,
+and a snapshot-SDK build of the backend. See `.github/workflows/build.yml`.
 
 ## License
 

@@ -340,7 +340,7 @@ return view.extend({
 							class: 'cbi-button cbi-button-apply',
 							disabled: !s.configured || null,
 							click: L.bind(this.reconnect, this)
-						}, _('Reconnect')),
+						}, s.state === 'disconnected' ? _('Enable') : _('Reconnect')),
 						E('button', {
 							class: 'cbi-button',
 							disabled: (!s.configured || (s.rotation && s.rotation.enabled !== true)) || null,

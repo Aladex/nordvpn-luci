@@ -1,8 +1,10 @@
 # NordVPN WireGuard for OpenWrt
 
 Configure NordVPN's WireGuard (NordLynx) service on OpenWrt, with a one-time
-credential exchange, country/city/server selection, automatic rotation, custom
-routing tables and a native LuCI page.
+credential exchange, country/city/server selection (including Double VPN and
+Onion over VPN), automatic rotation, multiple parallel VPN instances,
+per-network traffic steering with kill switch and IPv6 leak protection, and a
+native LuCI page.
 
 > **Unofficial.** This project is not affiliated with, endorsed by, or supported
 > by Nord Security. "NordVPN" and "NordLynx" are trademarks of their respective
@@ -129,9 +131,11 @@ states** — the page never claims "Connected" just because settings were saved.
 ## Configuration (`/etc/config/nordvpn`)
 
 The backend owns non-secret settings here; a fresh install ships **disabled**.
+One `config instance` section per VPN instance ('main' is the default and also
+carries the shared cache options).
 
 ```
-config settings 'main'
+config instance 'main'
 	option enabled '0'
 	option interface 'nordvpn'
 	option routing_table ''
@@ -146,10 +150,11 @@ config settings 'main'
 	option verify_timeout '8'        # seconds to wait for a WG handshake
 	option max_retries '10'          # candidate servers per rotation
 	option auto_routing '1'          # route all LAN traffic via the VPN
-	option killswitch '0'            # block LAN->WAN while the VPN is down
+	list source_network 'media'      # or: steer only these networks (see below)
+	option killswitch '0'            # block steered traffic while VPN is down
 	option block_ipv6 '1'            # block direct IPv6 (leak prevention)
 	option use_vpn_dns '0'           # push NordVPN resolvers while connected
-	option cache_dir ''              # empty = /tmp
+	option cache_dir ''              # empty = /tmp, shared by all instances
 	option cache_refresh_interval '21600'   # seconds, background refresh
 ```
 
@@ -263,13 +268,13 @@ serialized with a lock, and a failed refresh keeps the previous good cache.
 
 ## Traffic routing & firewall
 
-The **Traffic routing** panel decides how LAN traffic reaches the tunnel.
+The **Traffic routing** panel decides how traffic reaches the tunnel.
 On every apply the backend first *detects* the current scheme:
 
-- **Manual** — a custom routing table is configured, or static routes/rules
-  referencing the VPN interface exist. The package then never touches routing
-  or firewall; the panel is purely informational (with an IPv6-leak warning
-  when the WAN has IPv6).
+- **Manual** — unstamped routes/rules referencing the VPN interface exist, or
+  a routing table is configured without steering. The package then never
+  touches routing or firewall; the panel is purely informational (with an
+  IPv6-leak warning when the WAN has IPv6).
 
   ![Manual routing detected](docs/screenshots/routing-manual.png)
 
@@ -283,6 +288,16 @@ On every apply the backend first *detects* the current scheme:
   down), an **IPv6 block** (family-ipv6 REJECT LAN→WAN, on by default —
   NordLynx is IPv4-only inside, so direct IPv6 would bypass the tunnel), and
   **NordVPN DNS** on the interface.
+
+- **Steered** — specific networks are ticked under *Steered networks*
+  (`list source_network`). Only their traffic is policy-routed into the
+  instance's table; the router's own traffic and other networks are untouched.
+  The kill switch / IPv6 toggles become per-network prohibit rules that fire
+  only when the tunnel cannot serve the traffic, and every local IPv4 subnet
+  is mirrored into the table so VLAN-to-VLAN and local services stay
+  reachable (your own routes for a subnet always win).
+
+  ![Steered networks](docs/screenshots/routing-steered.png)
 
 Everything the automatic mode creates is stamped with `nordvpn_managed`;
 disabling a toggle (or automatic mode) removes exactly the stamped objects and

@@ -709,8 +709,9 @@ return view.extend({
 			this.row(_('Routing table'), [ this.input('routing_table', 'text', g('routing_table', ''), { placeholder: 'main' }) ],
 				_('Custom routing table (leave empty for the main table)')),
 			this.row(_('Connection wait (seconds)'), [ this.input('verify_timeout', 'number', g('verify_timeout', '8'), { min: 2, max: 30, style: 'width:80px' }) ],
-				_('How long to wait for a WireGuard handshake before trying the next server')),
-			this.row(_('Max server attempts'), [ this.input('max_retries', 'number', g('max_retries', '10'), { min: 1, max: 50, style: 'width:80px' }) ]),
+				_('How long to wait for a WireGuard handshake before giving up on a server')),
+			this.maxRetriesRow = this.row(_('Max server attempts'), [ this.input('max_retries', 'number', g('max_retries', '10'), { min: 1, max: 50, style: 'width:80px' }) ],
+				_('How many candidate servers a rotation may try')),
 			this.row(_('Cache directory'), [ this.input('cache_dir', 'text', gm('cache_dir', ''), { placeholder: '/tmp' }) ],
 				_('Where to store the downloaded server list, shared by all instances (leave empty for /tmp)')),
 			this.row(_('Server cache'), [
@@ -720,6 +721,11 @@ return view.extend({
 				])
 			])
 		]);
+
+		// The connection section is built (and may restore a pinned server)
+		// before this row exists — sync the initial visibility.
+		if (this.serverSel && this.serverSel.value)
+			this.maxRetriesRow.classList.add('hidden');
 
 		return E('details', { class: 'nv-advanced cbi-section' }, [
 			E('summary', {}, _('Advanced settings')),
@@ -902,6 +908,9 @@ return view.extend({
 		}
 		if (this.rotFixedNote)
 			this.rotFixedNote.classList.toggle('hidden', !fixed);
+		// With a pinned server there are no candidates to try.
+		if (this.maxRetriesRow)
+			this.maxRetriesRow.classList.toggle('hidden', !!fixed);
 		this.onRotationToggle();
 	},
 

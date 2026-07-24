@@ -1,5 +1,0 @@
-config settings 'settings'
-	# Directory for the server list cache (default: /tmp)
-	#option cache_dir '/tmp'
-	# Seconds between background cache refreshes (default: 21600 = 6 hours)
-	option cache_refresh_interval '21600'

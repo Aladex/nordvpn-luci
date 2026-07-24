@@ -38,14 +38,16 @@ function find_peer(uci, iface) {
 	return found;
 }
 
-// Exchange the token for a private key and persist ONLY the key. The token is
-// never written to UCI. Returns { ok: true } or { error }.
-function set_credentials(uci, token) {
+// Exchange the token for a private key and persist ONLY the key, on the
+// instance's own interface — every instance carries its own credentials (a
+// shared key reportedly risks being locked by NordVPN when reused). The token
+// is never written to UCI. Returns { ok: true } or { error }.
+function set_credentials(uci, token, instance) {
 	let res = get_private_key(token);
 	if (res.error)
 		return res;
 
-	let iface = validate_interface(load_settings(uci).interface);
+	let iface = validate_interface(load_settings(uci, instance).interface);
 	if (!iface)
 		return { error: 'invalid interface name' };
 
@@ -185,8 +187,8 @@ function connect_one(uci, iface, relay, s) {
 // automatic selection tries several candidates until one completes a handshake
 // (NordVPN publishes dead endpoints), rolling back to the previous working peer
 // if none do. Bounded so the rpc call stays within timeout.
-function apply(uci) {
-	let s = load_settings(uci);
+function apply(uci, instance) {
+	let s = load_settings(uci, instance);
 	let iface = validate_interface(s.interface);
 	if (!iface)
 		return { state: 'failure', error: 'invalid interface name' };

@@ -41,9 +41,10 @@ function find_peer(uci, iface) {
 	return found;
 }
 
-// Build the runtime status object. `next_run` is filled in by the caller/scheduler.
-function status(uci) {
-	let s = load_settings(uci);
+// Build the runtime status object for one instance ('main' by default).
+// `next_run` is filled in by the caller/scheduler.
+function status(uci, instance) {
+	let s = load_settings(uci, instance);
 	let iface = s.interface;
 
 	let has_key = validate_wg_key(uci.get('network', iface, 'private_key')) != null;
@@ -52,6 +53,7 @@ function status(uci) {
 	let endpoint_port = peer ? uci.get('network', peer, 'endpoint_port') : null;
 
 	let result = {
+		instance: s.name,
 		configured: has_key,
 		state: has_key ? 'disconnected' : 'not_configured',
 		interface: iface,

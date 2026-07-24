@@ -13,7 +13,8 @@ const _select = require('nordvpn.select');
 const candidates = _select.candidates, by_hostname = _select.by_hostname, pick = _select.pick;
 const parse_credentials = require('nordvpn.api').parse_credentials;
 const write_relay = require('nordvpn.apply').write_relay;
-const load_settings = require('nordvpn.common').load_settings;
+const _cmn = require('nordvpn.common');
+const load_settings = _cmn.load_settings, list_instances = _cmn.list_instances;
 const status = require('nordvpn.status').status;
 const _rotate = require('nordvpn.rotate');
 const shuffle = _rotate.shuffle, plan_candidates = _rotate.plan_candidates;
@@ -253,6 +254,47 @@ write_cache(cache, cpath);
 	// Turning automatic mode off restores the pristine configuration.
 	res = enforce_routing(uci, mks({ auto_routing: false }));
 	eq('routing: off restores pristine config', sprintf('%J', global.MOCK_UCI), pristine);
+}
+
+// 9. multi-instance: settings, listing, isolated state, per-instance status
+{
+	global.MOCK_UCI = { nordvpn: {
+		main: { '.type': 'instance', interface: 'nordvpn', country_code: 'de', cache_dir: '/shared' },
+		media: { '.type': 'instance', interface: 'nordvpn_rs', country_code: 'rs' }
+	}, network: {} };
+	let uci = cursor();
+	eq('instances listed, main first', list_instances(uci), [ 'main', 'media' ]);
+	eq('instance interface', load_settings(uci, 'media').interface, 'nordvpn_rs');
+	eq('instance country', load_settings(uci, 'media').country_code, 'rs');
+	eq('cache options shared from main', load_settings(uci, 'media').cache_dir, '/shared');
+	eq('default instance is main', load_settings(uci).name, 'main');
+	eq('invalid instance falls back to main', load_settings(uci, '../evil').name, 'main');
+
+	// A legacy `config settings 'main'` is still listed.
+	global.MOCK_UCI = { nordvpn: { main: { '.type': 'settings', interface: 'nordvpn' } }, network: {} };
+	uci = cursor();
+	eq('legacy settings section listed', list_instances(uci), [ 'main' ]);
+
+	// Rotation state files are isolated per instance ('main' keeps the old path).
+	unlink('/tmp/nordvpn_rotate_state.json');
+	unlink('/tmp/nordvpn_rotate_state_media.json');
+	_rotate.mark_attempt(1000);
+	_rotate.mark_attempt(2000, 'media');
+	eq('main rotate state isolated', _rotate.last_attempt_ts(), 1000);
+	eq('media rotate state isolated', _rotate.last_attempt_ts('media'), 2000);
+	unlink('/tmp/nordvpn_rotate_state.json');
+	unlink('/tmp/nordvpn_rotate_state_media.json');
+
+	// Status is per instance and reports its name.
+	global.MOCK_UCI = { nordvpn: {
+		main: { '.type': 'instance', interface: 'nordvpn' },
+		media: { '.type': 'instance', interface: 'nordvpn_rs' }
+	}, network: { nordvpn_rs: { '.type': 'interface', private_key: KEY } } };
+	global.MOCK_UBUS = {};
+	uci = cursor();
+	eq('status per instance: media configured', status(uci, 'media').configured, true);
+	eq('status per instance: main not configured', status(uci, 'main').configured, false);
+	eq('status carries the instance name', status(uci, 'media').instance, 'media');
 }
 
 unlink(cpath);

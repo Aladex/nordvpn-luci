@@ -1,4 +1,10 @@
-config settings 'main'
+# One section per VPN instance. 'main' is the default instance; additional
+# `config instance '<name>'` sections run their own tunnel on their own
+# interface with their own credentials (NordVPN reportedly locks a key that is
+# reused elsewhere, so issue a separate access token per instance). The
+# server-list cache options (cache_dir, cache_refresh_interval) are shared and
+# read from this section.
+config instance 'main'
 	# Master switch. A fresh install ships disabled so no tunnel starts and
 	# no routing changes happen before the user configures credentials.
 	option enabled '0'

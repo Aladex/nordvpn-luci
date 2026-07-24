@@ -6,9 +6,13 @@
 'use strict';
 
 const rotate = require('nordvpn.rotate').rotate;
-const log = require('nordvpn.common').log;
+const _common = require('nordvpn.common');
+const log = _common.log,
+      validate_instance = _common.validate_instance;
 
-let res = rotate();
+// Optional argument: the instance to rotate (default 'main').
+let instance = (length(ARGV) > 0 ? validate_instance(ARGV[0]) : null) || 'main';
+let res = rotate(null, instance);
 
 if (res.ok) {
 	printf('nordvpn-rotate: connected to %s\n', res.server);

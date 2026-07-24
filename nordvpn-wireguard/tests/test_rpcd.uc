@@ -19,7 +19,7 @@ function eq(l, g, w) { ok(l, sprintf('%J', g) == sprintf('%J', w)); }
 let obj = loadfile(RPCD)();
 let m = obj ? obj.nordvpn : null;
 ok('rpcd object present', m != null);
-ok('read methods present', type(m.status.call) == 'function' && type(m.locations.call) == 'function' && type(m.refresh_status.call) == 'function');
+ok('read methods present', type(m.status.call) == 'function' && type(m.locations.call) == 'function' && type(m.refresh_status.call) == 'function' && type(m.instances.call) == 'function');
 ok('write methods present', type(m.set_credentials.call) == 'function' && type(m.apply.call) == 'function' && type(m.rotate_now.call) == 'function' && type(m.refresh_locations.call) == 'function');
 
 // Build a cache on disk.
@@ -32,6 +32,8 @@ write_cache(cache, cdir + '/nordvpn_servers_cache.json');
 global.MOCK_UCI = { nordvpn: { main: { '.type': 'settings', interface: 'nordvpn', cache_dir: cdir } }, network: {} };
 global.MOCK_UBUS = {};
 eq('status not_configured', m.status.call().state, 'not_configured');
+eq('status rejects unknown instance', m.status.call({ args: { instance: 'nope' } }).error, 'no such instance');
+eq('instances lists main', length(m.instances.call().instances), 1);
 
 // locations from cache
 let loc = m.locations.call();

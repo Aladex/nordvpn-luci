@@ -29,6 +29,20 @@ const bring_up = _apply.bring_up,
 const ROTATE_LOCK = '/tmp/nordvpn_rotate.lock';
 const ROTATE_STATE = '/tmp/nordvpn_rotate_state.json';
 
+const validate_instance = _common.validate_instance;
+
+// Per-instance state/lock paths. The 'main' instance keeps the historical
+// filenames so upgrades do not reset the persisted rotation clock.
+function state_path(instance) {
+	let n = validate_instance(instance) || 'main';
+	return (n == 'main') ? ROTATE_STATE : '/tmp/nordvpn_rotate_state_' + n + '.json';
+}
+
+function lock_path(instance) {
+	let n = validate_instance(instance) || 'main';
+	return (n == 'main') ? ROTATE_LOCK : '/tmp/nordvpn_rotate_' + n + '.lock';
+}
+
 // Fisher-Yates shuffle (in a copy). Exported for testing.
 function shuffle(list) {
 	let a = [];
@@ -53,9 +67,10 @@ function plan_candidates(cache, settings, current_gateway, limit) {
 	return list;
 }
 
-// Last rotation state ({ last_attempt, last_success, server, updated_at }) or null.
-function read_state() {
-	let f = readfile(ROTATE_STATE);
+// Last rotation state ({ last_attempt, last_success, server, updated_at }) of
+// one instance, or null.
+function read_state(instance) {
+	let f = readfile(state_path(instance));
 	if (!f)
 		return null;
 	try {
@@ -68,31 +83,31 @@ function read_state() {
 // Merge fields into the persisted state and rewrite it atomically. Callers only
 // touch the keys they own (the daemon writes last_attempt; the worker writes
 // last_success + server), so neither clobbers the other's timestamp.
-function record(fields) {
-	let st = read_state() || {};
+function record(fields, instance) {
+	let st = read_state(instance) || {};
 	for (let k in fields)
 		st[k] = fields[k];
 	st.updated_at = iso_ts();
-	atomic_write(ROTATE_STATE, sprintf('%J', st));
+	atomic_write(state_path(instance), sprintf('%J', st));
 	return st;
 }
 
 // Epoch of the last rotation attempt (0 when unknown). The daemon schedules from
 // this persisted value instead of an in-memory counter, so a restart — e.g.
 // after every config save — does not reset the rotation clock and fire again.
-function last_attempt_ts() {
-	let st = read_state();
+function last_attempt_ts(instance) {
+	let st = read_state(instance);
 	return (st && type(st.last_attempt) == 'int') ? st.last_attempt : 0;
 }
 
 // Record that a rotation was attempted at `ts`. The daemon calls this before it
 // forks the worker so overlapping ticks cannot double-fire.
-function mark_attempt(ts) {
-	record({ last_attempt: ts });
+function mark_attempt(ts, instance) {
+	record({ last_attempt: ts }, instance);
 }
 
-function rotate_inner(uci) {
-	let s = load_settings(uci);
+function rotate_inner(uci, instance) {
+	let s = load_settings(uci, instance);
 	if (s.fixed_server && s.fixed_server != '')
 		return { skipped: true, reason: 'fixed server configured' };
 
@@ -115,8 +130,8 @@ function rotate_inner(uci) {
 		// through it: NordVPN publishes dead endpoints, and a routed ping can
 		// fail on a perfectly good server, which made rotation cycle servers.
 		if (verify_handshake(iface, s.verify_timeout)) {
-			record({ last_success: time(), server: relay.hostname });
-			log('rotated to ' + relay.hostname);
+			record({ last_success: time(), server: relay.hostname }, instance);
+			log('rotated ' + s.name + ' to ' + relay.hostname);
 			return { ok: true, server: relay.hostname };
 		}
 	}
@@ -130,16 +145,17 @@ function rotate_inner(uci) {
 	return { error: 'no working server found', restored: saved != null };
 }
 
-// Public entry point: serialize with any other rotation via a lock.
-function rotate(uci) {
+// Public entry point: serialize with any other rotation of the same instance
+// via a per-instance lock.
+function rotate(uci, instance) {
 	uci = uci || cursor();
-	let lock = acquire_lock(ROTATE_LOCK, 300);
+	let lock = acquire_lock(lock_path(instance), 300);
 	if (!lock)
 		return { skipped: true, reason: 'rotation already running' };
 
 	let res;
 	try {
-		res = rotate_inner(uci);
+		res = rotate_inner(uci, instance);
 	} catch (e) {
 		res = { error: 'rotation error: ' + e };
 	}

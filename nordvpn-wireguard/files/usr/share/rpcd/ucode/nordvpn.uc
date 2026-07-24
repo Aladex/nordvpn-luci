@@ -9,7 +9,9 @@
 import { cursor } from 'uci';
 const _common = require('nordvpn.common');
 const validate_token = _common.validate_token,
+      validate_instance = _common.validate_instance,
       load_settings = _common.load_settings,
+      list_instances = _common.list_instances,
       cache_file_path = _common.cache_file_path;
 const status = require('nordvpn.status').status;
 const _apply = require('nordvpn.apply');
@@ -29,19 +31,47 @@ const read_cache = _cache.read_cache,
 
 const methods = {};
 
+// Resolve and validate the requested instance name ('main' by default).
+// Returns the name, or null when the section does not exist.
+function req_instance(uci, request) {
+	let a = (request && request.args) ? request.args : {};
+	let name = (a.instance == null || a.instance == '') ? 'main' : validate_instance(a.instance);
+	if (!name || uci.get('nordvpn', name) == null)
+		return null;
+	return name;
+}
+
+function build_status(uci, name) {
+	let st = status(uci, name);
+	let state = read_state(name);
+	if (state && state.last_success)
+		st.rotation.last_success = state.last_success;
+	let s = load_settings(uci, name);
+	st.rotation.next_run = next_rotation(s, last_attempt_ts(name), time());
+	st.routing = detect_routing(uci, s, true);
+	return st;
+}
+
 // ── Read methods ─────────────────────────────────────────────────────
 
 methods.status = {
+	args: { instance: '' },
+	call: function(request) {
+		let uci = cursor();
+		let name = req_instance(uci, request);
+		if (!name)
+			return { error: 'no such instance' };
+		return build_status(uci, name);
+	}
+};
+
+methods.instances = {
 	call: function() {
 		let uci = cursor();
-		let st = status(uci);
-		let state = read_state();
-		if (state && state.last_success)
-			st.rotation.last_success = state.last_success;
-		let s = load_settings(uci);
-		st.rotation.next_run = next_rotation(s, last_attempt_ts(), time());
-		st.routing = detect_routing(uci, s, true);
-		return st;
+		let out = [];
+		for (let name in list_instances(uci))
+			push(out, build_status(uci, name));
+		return { instances: out };
 	}
 };
 
@@ -83,18 +113,27 @@ methods.refresh_status = {
 // ── Write methods ────────────────────────────────────────────────────
 
 methods.set_credentials = {
-	args: { token: '' },
+	args: { token: '', instance: '' },
 	call: function(request) {
 		let token = request.args ? request.args.token : null;
 		if (!validate_token(token))
 			return { error: 'invalid token format' };
-		return set_credentials(cursor(), token);
+		let uci = cursor();
+		let name = req_instance(uci, request);
+		if (!name)
+			return { error: 'no such instance' };
+		return set_credentials(uci, token, name);
 	}
 };
 
 methods.apply = {
-	call: function() {
-		return apply(cursor());
+	args: { instance: '' },
+	call: function(request) {
+		let uci = cursor();
+		let name = req_instance(uci, request);
+		if (!name)
+			return { error: 'no such instance' };
+		return apply(uci, name);
 	}
 };
 
@@ -110,8 +149,13 @@ methods.refresh_locations = {
 };
 
 methods.rotate_now = {
-	call: function() {
-		return rotate(cursor());
+	args: { instance: '' },
+	call: function(request) {
+		let uci = cursor();
+		let name = req_instance(uci, request);
+		if (!name)
+			return { error: 'no such instance' };
+		return rotate(uci, name);
 	}
 };
 

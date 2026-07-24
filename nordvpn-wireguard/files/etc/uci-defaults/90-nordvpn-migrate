@@ -9,9 +9,11 @@
 pkg=nordvpn
 
 # Ensure the config file and the 'main' section exist (a kept legacy config may
-# only contain the old 'settings' cache section).
+# only contain the old 'settings' cache section), and re-type a pre-multi-
+# instance 'settings' section to 'instance' (idempotent, keeps all options).
 [ -f "/etc/config/$pkg" ] || touch "/etc/config/$pkg"
-[ -n "$(uci -q get "$pkg.main")" ] || uci set "$pkg.main=settings"
+[ -n "$(uci -q get "$pkg.main")" ] || uci set "$pkg.main=instance"
+[ "$(uci -q get "$pkg.main")" = 'instance' ] || uci set "$pkg.main=instance"
 
 # Gate the legacy import on the schema stamp so it runs only once.
 if [ -z "$(uci -q get "$pkg.main.config_version")" ]; then

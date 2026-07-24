@@ -97,11 +97,13 @@ function count_user_routes(uci, iface, table) {
 	return n;
 }
 
-// Stamped firewall section (rule/forwarding/zone) with the given role, or null.
-function find_managed(uci, sectype, role) {
+// Stamped firewall section (rule/forwarding/zone) with the given role, or
+// null. Zone/forwarding objects are per-interface (pass `iface`); the kill
+// switch and IPv6 block are global (leave `iface` null).
+function find_managed(uci, sectype, role, iface) {
 	let found = null;
 	uci.foreach('firewall', sectype, function(sec) {
-		if (sec[MARK] == '1' && sec[ROLE] == role) {
+		if (sec[MARK] == '1' && sec[ROLE] == role && (iface == null || sec.nordvpn_iface == iface)) {
 			found = sec['.name'];
 			return false;
 		}
@@ -171,21 +173,22 @@ function enforce(uci, s) {
 			push(notes, 'manual routing detected; automatic default route removed');
 	}
 
-	// 2. Firewall zone + forwarding from the LAN zone.
+	// 2. Firewall zone + forwarding from the LAN zone. The zone is named after
+	//    the interface so every instance gets its own.
 	if (auto) {
 		if (!det.zone) {
 			let clash = false;
 			uci.foreach('firewall', 'zone', function(sec) {
-				if (sec.name == 'nordvpn') {
+				if (sec.name == iface) {
 					clash = true;
 					return false;
 				}
 			});
 			if (clash) {
-				push(notes, 'a firewall zone named nordvpn already exists; add the interface to a zone manually');
+				push(notes, 'a firewall zone named ' + iface + ' already exists; add the interface to a zone manually');
 			} else {
 				let z = uci.add('firewall', 'zone');
-				uci.set('firewall', z, 'name', 'nordvpn');
+				uci.set('firewall', z, 'name', iface);
 				uci.set('firewall', z, 'input', 'REJECT');
 				uci.set('firewall', z, 'output', 'ACCEPT');
 				uci.set('firewall', z, 'forward', 'REJECT');
@@ -194,11 +197,12 @@ function enforce(uci, s) {
 				uci.set('firewall', z, 'network', [ iface ]);
 				uci.set('firewall', z, MARK, '1');
 				uci.set('firewall', z, ROLE, 'zone');
+				uci.set('firewall', z, 'nordvpn_iface', iface);
 				cf = true;
-				det.zone = 'nordvpn';
+				det.zone = iface;
 			}
 		}
-		if (det.zone && !find_managed(uci, 'forwarding', 'forwarding')) {
+		if (det.zone && !find_managed(uci, 'forwarding', 'forwarding', iface)) {
 			let has_fwd = false;
 			uci.foreach('firewall', 'forwarding', function(sec) {
 				if (sec.dest == det.zone) {
@@ -213,6 +217,7 @@ function enforce(uci, s) {
 					uci.set('firewall', f, 'dest', det.zone);
 					uci.set('firewall', f, MARK, '1');
 					uci.set('firewall', f, ROLE, 'forwarding');
+					uci.set('firewall', f, 'nordvpn_iface', iface);
 					cf = true;
 				} else {
 					push(notes, 'could not determine the LAN zone; add a forwarding to the VPN zone manually');
@@ -220,12 +225,12 @@ function enforce(uci, s) {
 			}
 		}
 	} else {
-		let f = find_managed(uci, 'forwarding', 'forwarding');
+		let f = find_managed(uci, 'forwarding', 'forwarding', iface);
 		if (f) {
 			uci.delete('firewall', f);
 			cf = true;
 		}
-		let z = find_managed(uci, 'zone', 'zone');
+		let z = find_managed(uci, 'zone', 'zone', iface);
 		if (z) {
 			uci.delete('firewall', z);
 			cf = true;

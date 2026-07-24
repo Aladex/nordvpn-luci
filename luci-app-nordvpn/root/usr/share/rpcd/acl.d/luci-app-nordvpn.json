@@ -3,7 +3,7 @@
 		"description": "Grant access to NordVPN status, configuration and control",
 		"read": {
 			"ubus": {
-				"nordvpn": [ "status", "locations", "servers", "refresh_status" ]
+				"nordvpn": [ "status", "instances", "locations", "servers", "refresh_status" ]
 			},
 			"uci": [ "nordvpn" ]
 		},

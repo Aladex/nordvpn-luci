@@ -11,6 +11,7 @@ import * as uloop from 'uloop';
 import { cursor } from 'uci';
 const _common = require('nordvpn.common');
 const load_settings = _common.load_settings,
+      list_instances = _common.list_instances,
       cache_file_path = _common.cache_file_path,
       log = _common.log;
 const _cache = require('nordvpn.cache');
@@ -30,11 +31,15 @@ let last_cache = 0;
 
 function tick() {
 	// Fresh cursor each tick so committed config changes are picked up.
-	let s = load_settings(cursor());
+	let uci = cursor();
 	let now = time();
-	let path = cache_file_path(s);
+	let lt = localtime();
+	let hm = sprintf('%02d:%02d', lt.hour, lt.min);
 
-	if (should_refresh(s, last_cache, now, cache_is_stale(path))) {
+	// The server-list cache is shared by all instances; refresh it once.
+	let shared = load_settings(uci);
+	let path = cache_file_path(shared);
+	if (should_refresh(shared, last_cache, now, cache_is_stale(path))) {
 		last_cache = now;
 		uloop.task(function() { fetch_and_build(path); });
 	}
@@ -44,14 +49,16 @@ function tick() {
 	// counter would reset to 0 each time and make should_rotate() fire on the
 	// next tick. The first time rotation is active we only start the clock, so
 	// enabling rotation waits a full interval instead of rotating immediately.
-	let last = last_attempt_ts();
-	let lt = localtime();
-	let hm = sprintf('%02d:%02d', lt.hour, lt.min);
-	if (last == 0 && s.enabled && s.rotation_enabled && !(s.fixed_server && s.fixed_server != '')) {
-		mark_attempt(now);
-	} else if (should_rotate(s, last, now, hm)) {
-		mark_attempt(now);
-		uloop.task(function() { rotate(); });
+	for (let name in list_instances(uci)) {
+		let inst = name; // fresh binding for the task closure
+		let s = load_settings(uci, inst);
+		let last = last_attempt_ts(inst);
+		if (last == 0 && s.enabled && s.rotation_enabled && !(s.fixed_server && s.fixed_server != '')) {
+			mark_attempt(now, inst);
+		} else if (should_rotate(s, last, now, hm)) {
+			mark_attempt(now, inst);
+			uloop.task(function() { rotate(null, inst); });
+		}
 	}
 }
 

@@ -168,6 +168,7 @@ never returned.
 
 ```bash
 ubus call nordvpn status            # runtime state, location, handshake age
+ubus call nordvpn instances         # status of every configured VPN instance
 ubus call nordvpn locations         # cached country/city tree (+ per-city counts)
 ubus call nordvpn servers '{"country":"de","city":"de-berlin","hop_mode":"single"}'
 ubus call nordvpn refresh_status    # cache-refresh job progress
@@ -181,6 +182,20 @@ ubus call nordvpn refresh_locations # start an async server-list refresh
 WireGuard handshake fresher than 3 minutes, `degraded` means the interface is
 up but the handshake went stale, and `rotation.next_run` is the epoch of the
 next scheduled rotation (`null` when rotation cannot run).
+
+### Multiple VPN instances
+
+`/etc/config/nordvpn` may contain several `config instance '<name>'` sections
+('main' is the default). Each instance runs its own tunnel on its own
+interface with its own credentials and rotation schedule — e.g. the main
+route through Germany and a media network through Serbia. Issue a separate
+NordVPN access token per instance: reusing one key from several places has
+reportedly led to NordVPN locking it. `status`, `apply`, `rotate_now` and
+`set_credentials` accept an `instance` argument (default `main`);
+`nordvpn-rotate <name>` rotates one instance from the CLI. The server-list
+cache is shared. The LuCI page currently manages the 'main' instance;
+secondary instances are configured over UCI/ubus, with their traffic steered
+by your own policy-routing rules (their `routing_table`).
 
 Access is gated by the `luci-app-nordvpn` ACL: read methods for read sessions,
 write methods for write sessions. A read-only LuCI account cannot call the write

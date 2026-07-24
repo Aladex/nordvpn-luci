@@ -149,6 +149,13 @@ function validate_location_code(c) {
 	return match(c, /^[A-Za-z0-9-]+$/) ? c : null;
 }
 
+// Instance section name (also used in state-file paths, so keep it strict).
+function validate_instance(n) {
+	if (type(n) != 'string' || length(n) < 1 || length(n) > 32)
+		return null;
+	return match(n, /^[A-Za-z0-9_]+$/) ? n : null;
+}
+
 // Empty (main table) or a table name/number.
 function validate_routing_table(t) {
 	if (t == null || t == '')
@@ -175,20 +182,52 @@ function validate_dir(d) {
 
 // ── Settings ─────────────────────────────────────────────────────────
 
-// Load and normalize the non-secret settings from /etc/config/nordvpn.
-// `uci` is a connected uci cursor. Numeric/bounded fields fall back to the
-// documented defaults when missing or invalid.
-function load_settings(uci) {
+// VPN instance section names: every `config instance` section, plus a legacy
+// `config settings 'main'`. 'main' always sorts first.
+function list_instances(uci) {
+	let names = [];
+	uci.foreach('nordvpn', 'instance', function(sec) {
+		push(names, sec['.name']);
+	});
+	if (uci.get('nordvpn', 'main') != null && index(names, 'main') < 0)
+		push(names, 'main');
+	sort(names, function(a, b) {
+		if (a == 'main') return -1;
+		if (b == 'main') return 1;
+		return (a < b) ? -1 : (a > b) ? 1 : 0;
+	});
+	return names;
+}
+
+// Section carrying the shared (cache) options: an explicit 'globals' section
+// when present, the 'main' instance otherwise.
+function globals_section(uci) {
+	return (uci.get('nordvpn', 'globals') != null) ? 'globals' : 'main';
+}
+
+// Load and normalize the non-secret settings of one VPN instance from
+// /etc/config/nordvpn (`instance` defaults to 'main'). `uci` is a connected
+// uci cursor. Numeric/bounded fields fall back to the documented defaults
+// when missing or invalid. The server-list cache options are shared between
+// instances and always come from the globals/'main' section.
+function load_settings(uci, instance) {
+	let name = validate_instance(instance) || 'main';
 	let g = function(opt, dflt) {
-		let v = uci.get('nordvpn', 'main', opt);
+		let v = uci.get('nordvpn', name, opt);
 		return (v == null || v == '') ? dflt : v;
 	};
 	let bi = function(opt, dflt, min, max) {
 		let v = bounded_int(g(opt, dflt), min, max);
 		return (v == null) ? int(dflt) : v;
 	};
+	let shared = globals_section(uci);
+	let gs = function(opt, dflt) {
+		let v = uci.get('nordvpn', shared, opt);
+		return (v == null || v == '') ? dflt : v;
+	};
 
 	return {
+		name: name,
 		enabled: g('enabled', '0') == '1',
 		interface: validate_interface(g('interface', DEFAULT_INTERFACE)) || DEFAULT_INTERFACE,
 		routing_table: g('routing_table', ''),
@@ -209,8 +248,11 @@ function load_settings(uci) {
 		killswitch: g('killswitch', '0') == '1',
 		block_ipv6: g('block_ipv6', '1') == '1',
 		use_vpn_dns: g('use_vpn_dns', '0') == '1',
-		cache_dir: g('cache_dir', ''),
-		cache_refresh_interval: bi('cache_refresh_interval', '21600', MIN_CACHE_REFRESH, MAX_CACHE_REFRESH),
+		cache_dir: gs('cache_dir', ''),
+		cache_refresh_interval: (function() {
+			let v = bounded_int(gs('cache_refresh_interval', '21600'), MIN_CACHE_REFRESH, MAX_CACHE_REFRESH);
+			return (v == null) ? 21600 : v;
+		})(),
 	};
 }
 
@@ -337,7 +379,7 @@ return {
 	MIN_VERIFY_TIMEOUT, MAX_VERIFY_TIMEOUT,
 	bounded_int, validate_interface, validate_token, validate_wg_key, validate_hostname,
 	validate_port, validate_hop_mode, relay_kind, validate_rotation_mode, validate_interval, validate_time,
-	validate_country_code, validate_location_code, validate_routing_table, validate_dir,
-	load_settings, cache_file_path, iso_ts, redact, log,
+	validate_country_code, validate_location_code, validate_instance, validate_routing_table, validate_dir,
+	load_settings, list_instances, globals_section, cache_file_path, iso_ts, redact, log,
 	atomic_write, acquire_lock, release_lock, sh_quote, open_cmd, run
 };

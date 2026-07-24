@@ -17,6 +17,8 @@ const status = require('nordvpn.status').status;
 const _apply = require('nordvpn.apply');
 const apply = _apply.apply,
       set_credentials = _apply.set_credentials,
+      clear_credentials = _apply.clear_credentials,
+      disconnect = _apply.disconnect,
       create_instance = _apply.create_instance,
       delete_instance = _apply.delete_instance;
 const _rotate = require('nordvpn.rotate');
@@ -113,6 +115,26 @@ methods.refresh_status = {
 	}
 };
 
+// Public IP as seen through the instance's tunnel. Bound to the interface so
+// it reflects the VPN exit even with policy routing. Read-only network probe.
+methods.external_ip = {
+	args: { instance: '' },
+	call: function(request) {
+		let uci = cursor();
+		let name = req_instance(uci, request);
+		if (!name)
+			return { error: 'no such instance' };
+		let iface = load_settings(uci, name).interface;
+		for (let url in [ 'https://api.ipify.org', 'https://ifconfig.me/ip' ]) {
+			let r = _common.run([ 'curl', '-s', '-m', '8', '--interface', iface, url ]);
+			let ip = trim(r.stdout || '');
+			if (r.code == 0 && length(ip) > 0 && length(ip) <= 45 && match(ip, /^[0-9a-fA-F:.]+$/))
+				return { ip: ip, interface: iface };
+		}
+		return { error: 'could not determine the external IP' };
+	}
+};
+
 // ── Write methods ────────────────────────────────────────────────────
 
 methods.set_credentials = {
@@ -148,6 +170,28 @@ methods.refresh_locations = {
 		// Detached one-shot worker; fixed command, no user input, no shell injection.
 		system('/usr/bin/nordvpn-cache-update >/dev/null 2>&1 &');
 		return { job: '' + time(), started: true };
+	}
+};
+
+methods.disconnect = {
+	args: { instance: '' },
+	call: function(request) {
+		let uci = cursor();
+		let name = req_instance(uci, request);
+		if (!name)
+			return { error: 'no such instance' };
+		return disconnect(uci, name);
+	}
+};
+
+methods.clear_credentials = {
+	args: { instance: '' },
+	call: function(request) {
+		let uci = cursor();
+		let name = req_instance(uci, request);
+		if (!name)
+			return { error: 'no such instance' };
+		return clear_credentials(uci, name);
 	}
 };
 

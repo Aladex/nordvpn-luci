@@ -199,6 +199,12 @@ function apply(uci, instance) {
 	if (!cache)
 		return { state: 'failure', error: 'server list not available; refresh the cache first' };
 
+	// Applying implies the user wants the instance on — undo a disconnect.
+	if (!s.enabled) {
+		uci.set('nordvpn', s.name, 'enabled', '1');
+		uci.commit('nordvpn');
+	}
+
 	// Reconcile the managed routing/firewall objects with the settings. Only
 	// stamped objects are ever touched; a detected manual scheme is left alone.
 	let routing = enforce_routing(uci, s);
@@ -206,8 +212,12 @@ function apply(uci, instance) {
 		uci.commit('firewall');
 		run([ '/etc/init.d/firewall', 'reload' ]);
 	}
-	if (routing.changed_network)
+	if (routing.changed_network) {
 		uci.commit('network');
+		// Steering/prohibit rules are plain netifd config; a reload makes
+		// netifd apply the delta (unchanged interfaces are left alone).
+		run([ 'ubus', 'call', 'network', 'reload' ]);
+	}
 	for (let note in routing.notes)
 		_common.log('routing: ' + note);
 
@@ -258,6 +268,43 @@ function apply(uci, instance) {
 		error: 'could not reach any server for the current selection; restored the previous connection' };
 }
 
+// Take the tunnel down and keep it down (auto '0') until the next apply;
+// also flips the instance's master switch off so scheduled rotation stops.
+function disconnect(uci, instance) {
+	let s = load_settings(uci, instance);
+	let iface = validate_interface(s.interface);
+	if (!iface)
+		return { error: 'invalid interface name' };
+	uci.set('nordvpn', s.name, 'enabled', '0');
+	uci.commit('nordvpn');
+	if (uci.get('network', iface) != null) {
+		uci.set('network', iface, 'auto', '0');
+		uci.commit('network');
+	}
+	run([ 'ifdown', iface ]);
+	return { ok: true, interface: iface };
+}
+
+// Forget the stored WireGuard key and peer so the instance goes back to
+// "not configured". The selection (country, schedule, …) is kept so entering
+// a new token restores the previous behaviour.
+function clear_credentials(uci, instance) {
+	let s = load_settings(uci, instance);
+	let iface = validate_interface(s.interface);
+	if (!iface)
+		return { error: 'invalid interface name' };
+	run([ 'ifdown', iface ]);
+	let peer = find_peer(uci, iface);
+	if (peer)
+		uci.delete('network', peer);
+	if (uci.get('network', iface) != null) {
+		uci.delete('network', iface, 'private_key');
+		uci.set('network', iface, 'auto', '0');
+	}
+	uci.commit('network');
+	return { ok: true, interface: iface };
+}
+
 // Create a new VPN instance section with its own interface. Committed
 // atomically here (not via the UI's staged-apply machinery, whose rollback
 // window makes programmatic section creation fragile).
@@ -287,12 +334,11 @@ function create_instance(uci, name) {
 	return { ok: true, instance: name, interface: iface };
 }
 
-// Tear down and remove a secondary VPN instance: stamped routing/firewall
-// objects, the netifd interface + peer, and the config section itself.
-// 'main' cannot be deleted (it carries the shared cache options).
+// Tear down a VPN instance: stamped routing/firewall objects, the netifd
+// interface + peer, and the config section. 'main' is special — it anchors
+// the shared cache options and the UI, so instead of deleting the section its
+// options are reset to the shipped defaults (the migration stamp is kept).
 function delete_instance(uci, name) {
-	if (name == 'main')
-		return { error: 'the main instance cannot be deleted' };
 	if (uci.get('nordvpn', name) == null)
 		return { error: 'no such instance' };
 
@@ -306,10 +352,15 @@ function delete_instance(uci, name) {
 	s.killswitch = false;
 	s.block_ipv6 = false;
 	s.use_vpn_dns = false;
+	s.source_networks = [];
 	let routing = enforce_routing(uci, s);
 	if (routing.changed_firewall) {
 		uci.commit('firewall');
 		run([ '/etc/init.d/firewall', 'reload' ]);
+	}
+	if (routing.changed_network) {
+		uci.commit('network');
+		run([ 'ubus', 'call', 'network', 'reload' ]);
 	}
 
 	run([ 'ifdown', iface ]);
@@ -320,9 +371,20 @@ function delete_instance(uci, name) {
 		uci.delete('network', iface);
 	uci.commit('network');
 
+	if (name == 'main') {
+		let all = uci.get_all('nordvpn', 'main');
+		for (let k in all) {
+			if (substr(k, 0, 1) == '.' || k == 'config_version')
+				continue;
+			uci.delete('nordvpn', 'main', k);
+		}
+		uci.commit('nordvpn');
+		return { ok: true, reset: name, interface: iface };
+	}
+
 	uci.delete('nordvpn', name);
 	uci.commit('nordvpn');
 	return { ok: true, deleted: name, interface: iface };
 }
 
-return { set_credentials, current_peer, restore_peer, write_relay, bring_up, verify_handshake, connect_one, apply, create_instance, delete_instance };
+return { set_credentials, clear_credentials, current_peer, restore_peer, write_relay, bring_up, verify_handshake, connect_one, apply, disconnect, create_instance, delete_instance };

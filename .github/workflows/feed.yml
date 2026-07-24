@@ -53,41 +53,44 @@ jobs:
             printf '%s\n' "$OPKG_USIGN_SEC" > key-build
             cp "$GITHUB_WORKSPACE/keys/6bf1f0b6d25ceaad" key-build.pub
           else
-            # The apk-based build system reads the EC key from key-build.apk.sec.
-            printf '%s\n' "$APK_SEC_PEM" > key-build.apk.sec
-            cp "$GITHUB_WORKSPACE/keys/nordvpn-luci-apk.pem" key-build.apk.pem
+            printf '%s\n' "$APK_SEC_PEM" > private-key.pem
+            cp "$GITHUB_WORKSPACE/keys/nordvpn-luci-apk.pem" public-key.pem
           fi
 
-      - name: Build and index the packages
+      - name: Build the packages
         run: |
           cp -r nordvpn-wireguard "$SDKDIR/package/nordvpn-wireguard"
           cd "$SDKDIR"
           ./scripts/feeds update -a
-          ./scripts/feeds install -a
           cp -r "$GITHUB_WORKSPACE/luci-app-nordvpn" feeds/luci/applications/luci-app-nordvpn
+          ./scripts/feeds update -i luci
+          ./scripts/feeds install -a
           ./scripts/feeds install luci-app-nordvpn
-          echo 'CONFIG_SIGNED_PACKAGES=y' >> .config
           make defconfig
           make package/nordvpn-wireguard/compile
           make package/luci-app-nordvpn/compile
-          make package/index
 
-      - name: Collect the feed tree
+      - name: Collect and sign the feed
         run: |
           OUT="$GITHUB_WORKSPACE/feed-out/packages/${{ matrix.flavor }}"
           mkdir -p "$OUT"
-          cd "$SDKDIR/bin/packages"
-          ARCH=$(ls)
-          for feed in "$ARCH"/*/; do
-            name=$(basename "$feed")
-            if ls "$feed" | grep -q nordvpn; then
-              mkdir -p "$OUT/$name"
-              cp "$feed"/*nordvpn* "$OUT/$name/" 2>/dev/null || true
-              for idx in Packages Packages.gz Packages.sig packages.adb; do
-                [ -f "$feed/$idx" ] && cp "$feed/$idx" "$OUT/$name/"
-              done
-            fi
-          done
+          find "$SDKDIR/bin/packages" -name '*nordvpn*' -exec cp {} "$OUT/" \;
+          ls -la "$OUT"
+          cd "$OUT"
+          if [ "${{ matrix.flavor }}" = "opkg" ]; then
+            PATH="$GITHUB_WORKSPACE/$SDKDIR/staging_dir/host/bin:$PATH" MKHASH=mkhash \
+              "$GITHUB_WORKSPACE/$SDKDIR/scripts/ipkg-make-index.sh" . > Packages
+            gzip -fk Packages
+            "$GITHUB_WORKSPACE/$SDKDIR/staging_dir/host/bin/usign" -S -m Packages \
+              -s "$GITHUB_WORKSPACE/$SDKDIR/key-build" -x Packages.sig
+          else
+            "$GITHUB_WORKSPACE/$SDKDIR/staging_dir/host/bin/apk" mkndx \
+              --root "$GITHUB_WORKSPACE/$SDKDIR" \
+              --keys-dir "$GITHUB_WORKSPACE/$SDKDIR" \
+              --allow-untrusted \
+              --sign "$GITHUB_WORKSPACE/$SDKDIR/private-key.pem" \
+              --output packages.adb *.apk
+          fi
           find "$GITHUB_WORKSPACE/feed-out" -type f
 
       - uses: actions/upload-artifact@v4

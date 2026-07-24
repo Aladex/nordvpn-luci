@@ -1,61 +1,108 @@
-name: Build package
+name: CI
 
 on:
   push:
     branches: [master]
     tags: ["v*"]
+  pull_request:
+    branches: [master]
   workflow_dispatch:
 
-env:
-  OPENWRT_VERSION: "24.10.7"
-  SDK_DIR: "openwrt-sdk-24.10.7-x86-64_gcc-13.3.0_musl.Linux-x86_64"
-  SDK_URL: "https://downloads.openwrt.org/releases/24.10.7/targets/x86/64/openwrt-sdk-24.10.7-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
-
 jobs:
-  build:
-    runs-on: ubuntu-24.04
+  static:
+    name: Static checks (shell / JSON / whitespace)
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: sh -n on shell scripts
+        run: |
+          for f in \
+            nordvpn-wireguard/files/etc/init.d/nordvpn \
+            nordvpn-wireguard/files/etc/uci-defaults/90-nordvpn-migrate \
+            nordvpn-wireguard/tests/run.sh; do
+            echo "sh -n $f"; sh -n "$f"
+          done
+      - name: Validate all JSON
+        run: |
+          fail=0
+          for f in $(find . -path ./node_modules -prune -o -name '*.json' -print); do
+            echo "jq $f"; jq -e . "$f" >/dev/null || fail=1
+          done
+          exit $fail
+      - name: Whitespace / conflict markers
+        run: git diff --check "$(git hash-object -t tree /dev/null)"
 
-      - name: Cache OpenWrt SDK
-        id: sdk-cache
-        uses: actions/cache@v4
+  eslint:
+    name: ESLint (LuCI JS view)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          path: ${{ env.SDK_DIR }}
-          key: ${{ env.SDK_DIR }}
+          node-version: lts/*
+      - run: npm install --no-save --no-audit --no-fund --legacy-peer-deps eslint@9 @eslint/js@9 globals@15
+      - run: npx eslint luci-app-nordvpn
 
-      - name: Download and extract SDK
-        if: steps.sdk-cache.outputs.cache-hit != 'true'
+  ucode:
+    name: ucode syntax + offline tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build a minimal ucode (core + fs + math)
         run: |
           sudo apt-get update
-          sudo apt-get install -y zstd
-          curl -fSL -o sdk.tar.zst "$SDK_URL"
+          sudo apt-get install -y cmake gcc build-essential libjson-c-dev git
+          git clone --depth 1 https://github.com/jow-/ucode.git /tmp/ucode
+          cd /tmp/ucode
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DFS_SUPPORT=ON -DMATH_SUPPORT=ON -DSTRUCT_SUPPORT=OFF \
+            -DUBUS_SUPPORT=OFF -DUCI_SUPPORT=OFF -DULOOP_SUPPORT=OFF \
+            -DRTNL_SUPPORT=OFF -DNL80211_SUPPORT=OFF -DRESOLV_SUPPORT=OFF \
+            -DDEBUG_SUPPORT=OFF -DLOG_SUPPORT=OFF
+          cmake --build build -j"$(nproc)"
+      - name: Compile-check standalone ucode programs
+        run: |
+          UC=/tmp/ucode/build/ucode
+          LIB="$PWD/nordvpn-wireguard/files/usr/share/ucode"
+          MOCKS="$PWD/nordvpn-wireguard/tests/mocks"
+          B=/tmp/ucode/build
+          for f in \
+            nordvpn-wireguard/files/usr/share/rpcd/ucode/nordvpn.uc \
+            nordvpn-wireguard/files/usr/bin/nordvpn-cache-update \
+            nordvpn-wireguard/files/usr/bin/nordvpn-rotate; do
+            echo "ucode -c $f"
+            "$UC" -L "$MOCKS/*.uc" -L "$LIB/*.uc" -L "$B/*.so" -c "$f"
+          done
+      - name: Run offline fixture/unit tests (modules compiled by import)
+        run: |
+          UCODE=/tmp/ucode/build/ucode \
+          UCODE_EXTRA_L="/tmp/ucode/build/*.so" \
+            sh nordvpn-wireguard/tests/run.sh
+
+  build-backend:
+    name: Build nordvpn-wireguard (snapshot SDK, apk)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download the current x86/64 snapshot SDK
+        run: |
+          sudo apt-get update && sudo apt-get install -y zstd
+          BASE=https://downloads.openwrt.org/snapshots/targets/x86/64
+          SDK=$(curl -sSL "$BASE/sha256sums" | grep -o 'openwrt-sdk-[^ ]*x86-64[^ ]*\.tar\.zst' | head -1)
+          echo "SDK=$SDK"
+          curl -fSL -o sdk.tar.zst "$BASE/$SDK"
           tar -I zstd -xf sdk.tar.zst
-          rm sdk.tar.zst
-
-      - name: Install build prerequisites
+          echo "SDKDIR=${SDK%.tar.zst}" >> "$GITHUB_ENV"
+      - name: Build the backend package
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential gawk gettext libncurses-dev rsync unzip zlib1g-dev
-
-      - name: Build luci-app-nordvpn
-        run: |
-          cd "$SDK_DIR"
+          cp -r nordvpn-wireguard "$SDKDIR/package/nordvpn-wireguard"
+          cd "$SDKDIR"
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          mkdir -p package/luci-app-nordvpn
-          cp -r "$GITHUB_WORKSPACE"/Makefile "$GITHUB_WORKSPACE"/luasrc "$GITHUB_WORKSPACE"/root package/luci-app-nordvpn/
           make defconfig
-          make package/luci-app-nordvpn/compile V=s
-
-      - name: Upload ipk artifact
-        uses: actions/upload-artifact@v4
+          make package/nordvpn-wireguard/compile V=s
+      - uses: actions/upload-artifact@v4
         with:
-          name: luci-app-nordvpn-ipk
-          path: ${{ env.SDK_DIR }}/bin/packages/*/luci_app_nordvpn/luci-app-nordvpn_*.ipk
-
-      - name: Create release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: ${{ env.SDK_DIR }}/bin/packages/*/luci_app_nordvpn/luci-app-nordvpn_*.ipk
+          name: nordvpn-wireguard-apk
+          path: ${{ env.SDKDIR }}/bin/packages/*/*/nordvpn-wireguard-*.apk
+          if-no-files-found: warn

@@ -9,10 +9,17 @@
 
 import * as uloop from 'uloop';
 import { cursor } from 'uci';
-import { load_settings, cache_file_path, log } from 'nordvpn.common';
-import { fetch_and_build, cache_is_stale } from 'nordvpn.cache';
-import { rotate } from 'nordvpn.rotate';
-import { should_refresh, should_rotate } from 'nordvpn.service';
+const _common = require('nordvpn.common');
+const load_settings = _common.load_settings,
+      cache_file_path = _common.cache_file_path,
+      log = _common.log;
+const _cache = require('nordvpn.cache');
+const fetch_and_build = _cache.fetch_and_build,
+      cache_is_stale = _cache.cache_is_stale;
+const rotate = require('nordvpn.rotate').rotate;
+const _service = require('nordvpn.service');
+const should_refresh = _service.should_refresh,
+      should_rotate = _service.should_rotate;
 
 uloop.init();
 

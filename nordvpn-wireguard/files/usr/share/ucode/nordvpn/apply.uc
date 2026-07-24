@@ -4,15 +4,25 @@
 
 'use strict';
 
-import {
-	FIXED_ADDRESS, DEFAULT_PORT, DEFAULT_KEEPALIVE,
-	load_settings, cache_file_path, validate_interface, validate_wg_key,
-	iso_ts, run, log
-} from 'nordvpn.common';
 import { srand } from 'math';
-import { read_cache } from 'nordvpn.cache';
-import { candidates, by_hostname, pick } from 'nordvpn.select';
-import { get_private_key } from 'nordvpn.api';
+const _common = require('nordvpn.common');
+const FIXED_ADDRESS = _common.FIXED_ADDRESS,
+      DEFAULT_PORT = _common.DEFAULT_PORT,
+      DEFAULT_KEEPALIVE = _common.DEFAULT_KEEPALIVE,
+      load_settings = _common.load_settings,
+      cache_file_path = _common.cache_file_path,
+      validate_interface = _common.validate_interface,
+      validate_wg_key = _common.validate_wg_key,
+      iso_ts = _common.iso_ts,
+      run = _common.run;
+const _cache = require('nordvpn.cache');
+const read_cache = _cache.read_cache;
+const _select = require('nordvpn.select');
+const candidates = _select.candidates,
+      by_hostname = _select.by_hostname,
+      pick = _select.pick;
+const _api = require('nordvpn.api');
+const get_private_key = _api.get_private_key;
 
 // Locate the managed peer section (type wireguard_<iface>, interface=<iface>).
 function find_peer(uci, iface) {
@@ -28,7 +38,7 @@ function find_peer(uci, iface) {
 
 // Exchange the token for a private key and persist ONLY the key. The token is
 // never written to UCI. Returns { ok: true } or { error }.
-export function set_credentials(uci, token) {
+function set_credentials(uci, token) {
 	let res = get_private_key(token);
 	if (res.error)
 		return res;
@@ -49,7 +59,7 @@ export function set_credentials(uci, token) {
 }
 
 // Snapshot the current peer so a failed rotation can be rolled back.
-export function current_peer(uci, iface) {
+function current_peer(uci, iface) {
 	let peer = find_peer(uci, iface);
 	if (!peer)
 		return null;
@@ -62,7 +72,7 @@ export function current_peer(uci, iface) {
 }
 
 // Restore a peer snapshot taken by current_peer() (no commit).
-export function restore_peer(uci, iface, saved) {
+function restore_peer(uci, iface, saved) {
 	if (!saved)
 		return;
 	let peer = find_peer(uci, iface);
@@ -80,7 +90,7 @@ export function restore_peer(uci, iface, saved) {
 }
 
 // Write the interface + peer for the chosen relay (no commit).
-export function write_relay(uci, iface, relay, s) {
+function write_relay(uci, iface, relay, s) {
 	uci.set('network', iface, 'proto', 'wireguard');
 	uci.set('network', iface, 'vpn_type', 'nordvpn');
 	uci.set('network', iface, 'auto', '1');
@@ -113,7 +123,7 @@ export function write_relay(uci, iface, relay, s) {
 
 // Bring the managed interface up. iface is whitelist-validated, so the argv is
 // injection-safe (no shell).
-export function bring_up(iface) {
+function bring_up(iface) {
 	return run([ 'ifup', iface ]).code == 0;
 }
 
@@ -136,7 +146,7 @@ function choose_relay(uci) {
 // Apply the persisted configuration: pick a relay, write the interface/peer
 // transactionally, commit, and bring the interface up. Returns an apply-state
 // object; the caller polls status to confirm the handshake.
-export function apply(uci) {
+function apply(uci) {
 	let s = load_settings(uci);
 	let iface = validate_interface(s.interface);
 	if (!iface)
@@ -162,3 +172,5 @@ export function apply(uci) {
 		error: up ? null : 'configuration saved but the interface failed to start'
 	};
 }
+
+return { set_credentials, current_peer, restore_peer, write_relay, bring_up, apply };

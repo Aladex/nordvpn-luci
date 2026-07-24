@@ -63,7 +63,7 @@ define Package/nordvpn-wireguard/install
 
 	$(INSTALL_DIR) $(1)/usr/share/ucode/nordvpn
 	$(INSTALL_DATA) ./files/usr/share/ucode/nordvpn/*.uc $(1)/usr/share/ucode/nordvpn/
-	$(SED) "s|^export const VERSION = .*|export const VERSION = '$(PKG_VERSION)-r$(PKG_RELEASE)';|" \
+	$(SED) "s|^const VERSION = .*|const VERSION = '$(PKG_VERSION)-r$(PKG_RELEASE)';|" \
 		$(1)/usr/share/ucode/nordvpn/common.uc
 
 	$(INSTALL_DIR) $(1)/usr/share/rpcd/ucode

@@ -7,7 +7,8 @@
 'use strict';
 
 import { readfile, mkdir } from 'fs';
-import { normalize, write_cache } from 'nordvpn.cache';
+const _cache = require('nordvpn.cache');
+const normalize = _cache.normalize, write_cache = _cache.write_cache;
 import { cursor } from 'uci';
 
 let fails = 0;

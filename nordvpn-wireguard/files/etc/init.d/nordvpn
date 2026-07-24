@@ -12,7 +12,7 @@ EXTRA_COMMANDS="version"
 EXTRA_HELP="	version         Show the installed nordvpn-wireguard version"
 
 version() {
-	ucode -e 'import { VERSION } from "nordvpn.common"; print(VERSION, "\n");' 2>/dev/null
+	ucode -e 'print(require("nordvpn.common").VERSION, "\n");' 2>/dev/null
 }
 
 start_service() {

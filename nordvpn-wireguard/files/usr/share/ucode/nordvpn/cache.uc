@@ -6,12 +6,22 @@
 
 'use strict';
 
-import { popen, readfile } from 'fs';
-import {
-	SERVERS_URL, PAGE_SIZE, MAX_PAGES, DEFAULT_PORT,
-	CACHE_MAX_AGE, CACHE_SCHEMA_VERSION, FETCH_STATUS_FILE, CACHE_LOCK_FILE,
-	atomic_write, acquire_lock, release_lock, iso_ts, log
-} from 'nordvpn.common';
+import { readfile } from 'fs';
+const _common = require('nordvpn.common');
+const open_cmd = _common.open_cmd,
+      SERVERS_URL = _common.SERVERS_URL,
+      PAGE_SIZE = _common.PAGE_SIZE,
+      MAX_PAGES = _common.MAX_PAGES,
+      DEFAULT_PORT = _common.DEFAULT_PORT,
+      CACHE_MAX_AGE = _common.CACHE_MAX_AGE,
+      CACHE_SCHEMA_VERSION = _common.CACHE_SCHEMA_VERSION,
+      FETCH_STATUS_FILE = _common.FETCH_STATUS_FILE,
+      CACHE_LOCK_FILE = _common.CACHE_LOCK_FILE,
+      atomic_write = _common.atomic_write,
+      acquire_lock = _common.acquire_lock,
+      release_lock = _common.release_lock,
+      iso_ts = _common.iso_ts,
+      log = _common.log;
 
 const MAX_RESPONSE = 16 * 1024 * 1024; // hard cap per API response
 const CONNECT_TIMEOUT = 15;
@@ -37,7 +47,7 @@ function http_get(url) {
 		'-H', 'Accept: application/json',
 		url
 	];
-	let proc = popen(argv, 'r');
+	let proc = open_cmd(argv, 'r');
 	if (!proc)
 		return { ok: false, error: 'failed to start curl' };
 
@@ -59,12 +69,12 @@ function http_get(url) {
 
 // ── Fetch-status file (progress for the UI) ──────────────────────────
 
-export function write_fetch_status(status) {
+function write_fetch_status(status) {
 	status.updated_at = iso_ts();
 	return atomic_write(FETCH_STATUS_FILE, sprintf('%J', status));
 }
 
-export function read_fetch_status() {
+function read_fetch_status() {
 	let data = readfile(FETCH_STATUS_FILE);
 	if (!data)
 		return null;
@@ -133,7 +143,7 @@ function extract_public_key(server) {
 }
 
 // Add one raw API server object to the accumulator.
-export function add_server(acc, server) {
+function add_server(acc, server) {
 	acc.stats.servers_seen++;
 
 	let locs = server.locations;
@@ -234,7 +244,7 @@ function finalize(acc) {
 
 // Normalize an array of raw API server objects into the cache structure.
 // Exported for fixture tests (no network access required).
-export function normalize(list) {
+function normalize(list) {
 	let acc = new_accumulator();
 	for (let server in list)
 		add_server(acc, server);
@@ -243,7 +253,7 @@ export function normalize(list) {
 
 // ── Full paginated fetch ─────────────────────────────────────────────
 
-export function fetch_servers() {
+function fetch_servers() {
 	let acc = new_accumulator();
 	let offset = 0, pages = 0, last_page = 0;
 	let started = iso_ts();
@@ -315,7 +325,7 @@ export function fetch_servers() {
 // ── Cache read/write ─────────────────────────────────────────────────
 
 // Read the cache, rejecting malformed or schema-incompatible content.
-export function read_cache(path) {
+function read_cache(path) {
 	let data = readfile(path);
 	if (!data)
 		return null;
@@ -327,14 +337,14 @@ export function read_cache(path) {
 
 // True when the cache is missing, unreadable, incompatible or older than the
 // staleness threshold.
-export function cache_is_stale(path) {
+function cache_is_stale(path) {
 	let obj = read_cache(path);
 	if (!obj || type(obj.cached_at) != 'int')
 		return true;
 	return (time() - obj.cached_at) > CACHE_MAX_AGE;
 }
 
-export function write_cache(response, path) {
+function write_cache(response, path) {
 	response.cached_at = time();
 	response.schema_version = CACHE_SCHEMA_VERSION;
 	response.cache_info = {
@@ -349,7 +359,7 @@ export function write_cache(response, path) {
 
 // Fetch all pages and persist the cache under a single-writer lock. Keeps the
 // previous cache when the refresh fails. Returns the response or { error }.
-export function fetch_and_build(path) {
+function fetch_and_build(path) {
 	let lock = acquire_lock(CACHE_LOCK_FILE);
 	if (!lock)
 		return { error: 'refresh already in progress' };
@@ -367,3 +377,8 @@ export function fetch_and_build(path) {
 
 	return resp;
 }
+
+return {
+	write_fetch_status, read_fetch_status, add_server, normalize,
+	fetch_servers, read_cache, cache_is_stale, write_cache, fetch_and_build
+};

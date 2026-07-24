@@ -7,11 +7,19 @@
 'use strict';
 
 import { cursor } from 'uci';
-import { validate_token, load_settings, cache_file_path } from 'nordvpn.common';
-import { status } from 'nordvpn.status';
-import { apply, set_credentials } from 'nordvpn.apply';
-import { rotate, read_state } from 'nordvpn.rotate';
-import { read_cache, read_fetch_status, cache_is_stale } from 'nordvpn.cache';
+const _common = require('nordvpn.common');
+const validate_token = _common.validate_token,
+      load_settings = _common.load_settings,
+      cache_file_path = _common.cache_file_path;
+const status = require('nordvpn.status').status;
+const _apply = require('nordvpn.apply');
+const apply = _apply.apply, set_credentials = _apply.set_credentials;
+const _rotate = require('nordvpn.rotate');
+const rotate = _rotate.rotate, read_state = _rotate.read_state;
+const _cache = require('nordvpn.cache');
+const read_cache = _cache.read_cache,
+      read_fetch_status = _cache.read_fetch_status,
+      cache_is_stale = _cache.cache_is_stale;
 
 const methods = {};
 

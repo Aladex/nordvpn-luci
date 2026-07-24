@@ -7,13 +7,17 @@
 'use strict';
 
 import { readfile, writefile, unlink, mkdir, popen, pipe } from 'fs';
-import { normalize, write_cache } from 'nordvpn.cache';
-import { candidates, by_hostname, pick } from 'nordvpn.select';
-import { parse_credentials } from 'nordvpn.api';
-import { apply } from 'nordvpn.apply';
-import { status } from 'nordvpn.status';
-import { shuffle, plan_candidates } from 'nordvpn.rotate';
-import { should_refresh, should_rotate } from 'nordvpn.service';
+const _cache = require('nordvpn.cache');
+const normalize = _cache.normalize, write_cache = _cache.write_cache;
+const _select = require('nordvpn.select');
+const candidates = _select.candidates, by_hostname = _select.by_hostname, pick = _select.pick;
+const parse_credentials = require('nordvpn.api').parse_credentials;
+const apply = require('nordvpn.apply').apply;
+const status = require('nordvpn.status').status;
+const _rotate = require('nordvpn.rotate');
+const shuffle = _rotate.shuffle, plan_candidates = _rotate.plan_candidates;
+const _service = require('nordvpn.service');
+const should_refresh = _service.should_refresh, should_rotate = _service.should_rotate;
 import { cursor } from 'uci';
 
 let fails = 0;

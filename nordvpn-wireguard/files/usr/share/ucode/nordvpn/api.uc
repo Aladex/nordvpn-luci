@@ -5,12 +5,16 @@
 
 'use strict';
 
-import { pipe, popen } from 'fs';
-import { CREDS_URL, validate_token, validate_wg_key } from 'nordvpn.common';
+import { pipe } from 'fs';
+const _common = require('nordvpn.common');
+const CREDS_URL = _common.CREDS_URL,
+      open_cmd = _common.open_cmd,
+      validate_token = _common.validate_token,
+      validate_wg_key = _common.validate_wg_key;
 
 // Pure: parse the credential API JSON into { private_key } or { error }.
 // Exported so it can be unit-tested without any network access.
-export function parse_credentials(body) {
+function parse_credentials(body) {
 	let data;
 	try {
 		data = json(body);
@@ -26,7 +30,7 @@ export function parse_credentials(body) {
 }
 
 // Exchange a 64-hex token for the NordLynx WireGuard private key.
-export function get_private_key(token) {
+function get_private_key(token) {
 	if (!validate_token(token))
 		return { error: 'invalid token format' };
 
@@ -48,7 +52,7 @@ export function get_private_key(token) {
 		'--config', '/proc/self/fd/' + rfd,
 		CREDS_URL
 	];
-	let proc = popen(argv, 'r');
+	let proc = open_cmd(argv, 'r');
 	if (!proc) {
 		r.close();
 		return { error: 'failed to start curl' };
@@ -71,3 +75,5 @@ export function get_private_key(token) {
 
 	return parse_credentials(body);
 }
+
+return { parse_credentials, get_private_key };

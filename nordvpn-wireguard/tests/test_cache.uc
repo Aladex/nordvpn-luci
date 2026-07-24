@@ -6,7 +6,7 @@
 'use strict';
 
 import { readfile } from 'fs';
-import { normalize } from 'nordvpn.cache';
+const normalize = require('nordvpn.cache').normalize;
 
 let raw = readfile(fixture);
 if (!raw) {

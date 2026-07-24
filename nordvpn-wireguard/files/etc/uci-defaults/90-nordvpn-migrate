@@ -44,6 +44,9 @@ if [ -z "$(uci -q get "$pkg.main.config_version")" ]; then
 		_copy nordvpn_ping_count        ping_count
 		_copy nordvpn_ping_timeout      ping_timeout
 		_copy nordvpn_max_retries       max_retries
+		# Preserve policy-routing: the legacy interface's ip4table drives the
+		# new routing_table option (applied to ip4table/ip6table on apply).
+		_copy ip4table                  routing_table
 
 		# Preserve a pinned server (fixed_server holds the gateway hostname).
 		if [ "$(uci -q get "network.$legacy_if.nordvpn_fixed_server")" = '1' ]; then

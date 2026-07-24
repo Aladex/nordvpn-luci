@@ -9,20 +9,30 @@
 import { rand, srand } from 'math';
 import { readfile } from 'fs';
 import { cursor } from 'uci';
-import {
-	load_settings, cache_file_path, ping_through, iso_ts, atomic_write,
-	acquire_lock, release_lock, run, log
-} from 'nordvpn.common';
-import { read_cache } from 'nordvpn.cache';
-import { candidates } from 'nordvpn.select';
-import { write_relay, bring_up, current_peer, restore_peer } from 'nordvpn.apply';
+const _common = require('nordvpn.common');
+const load_settings = _common.load_settings,
+      cache_file_path = _common.cache_file_path,
+      ping_through = _common.ping_through,
+      iso_ts = _common.iso_ts,
+      atomic_write = _common.atomic_write,
+      acquire_lock = _common.acquire_lock,
+      release_lock = _common.release_lock,
+      run = _common.run,
+      log = _common.log;
+const read_cache = require('nordvpn.cache').read_cache;
+const candidates = require('nordvpn.select').candidates;
+const _apply = require('nordvpn.apply');
+const write_relay = _apply.write_relay,
+      bring_up = _apply.bring_up,
+      current_peer = _apply.current_peer,
+      restore_peer = _apply.restore_peer;
 
 const ROTATE_LOCK = '/tmp/nordvpn_rotate.lock';
 const ROTATE_STATE = '/tmp/nordvpn_rotate_state.json';
 const SETTLE_SECONDS = 3;
 
 // Fisher-Yates shuffle (in a copy). Exported for testing.
-export function shuffle(list) {
+function shuffle(list) {
 	let a = [ ...list ];
 	for (let i = length(a) - 1; i > 0; i--) {
 		let j = rand() % (i + 1);
@@ -33,7 +43,7 @@ export function shuffle(list) {
 
 // Ordered candidate list: matching relays, current gateway excluded, shuffled
 // and capped at `limit`. Pure/testable.
-export function plan_candidates(cache, settings, current_gateway, limit) {
+function plan_candidates(cache, settings, current_gateway, limit) {
 	let list = candidates(cache, settings.country_code, settings.city_code, settings.hop_mode);
 	if (current_gateway)
 		list = filter(list, function(r) { return r.hostname != current_gateway; });
@@ -44,7 +54,7 @@ export function plan_candidates(cache, settings, current_gateway, limit) {
 }
 
 // Last rotation state ({ last_success, server, updated_at }) or null.
-export function read_state() {
+function read_state() {
 	let f = readfile(ROTATE_STATE);
 	if (!f)
 		return null;
@@ -100,7 +110,7 @@ function rotate_inner(uci) {
 }
 
 // Public entry point: serialize with any other rotation via a lock.
-export function rotate(uci) {
+function rotate(uci) {
 	uci = uci || cursor();
 	let lock = acquire_lock(ROTATE_LOCK, 300);
 	if (!lock)
@@ -115,3 +125,5 @@ export function rotate(uci) {
 	release_lock(lock);
 	return res;
 }
+
+return { shuffle, plan_candidates, read_state, rotate };

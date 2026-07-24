@@ -6,8 +6,11 @@
 'use strict';
 
 import { cursor } from 'uci';
-import { load_settings, cache_file_path, log } from 'nordvpn.common';
-import { fetch_and_build } from 'nordvpn.cache';
+const _common = require('nordvpn.common');
+const load_settings = _common.load_settings,
+      cache_file_path = _common.cache_file_path,
+      log = _common.log;
+const fetch_and_build = require('nordvpn.cache').fetch_and_build;
 
 let uci = cursor();
 let settings = load_settings(uci);

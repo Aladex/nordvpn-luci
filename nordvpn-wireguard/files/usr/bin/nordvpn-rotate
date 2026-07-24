@@ -5,8 +5,8 @@
 
 'use strict';
 
-import { rotate } from 'nordvpn.rotate';
-import { log } from 'nordvpn.common';
+const rotate = require('nordvpn.rotate').rotate;
+const log = require('nordvpn.common').log;
 
 let res = rotate();
 

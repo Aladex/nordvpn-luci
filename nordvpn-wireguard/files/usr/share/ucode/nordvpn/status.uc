@@ -5,7 +5,10 @@
 'use strict';
 
 import { connect } from 'ubus';
-import { load_settings, validate_wg_key, run } from 'nordvpn.common';
+const _common = require('nordvpn.common');
+const load_settings = _common.load_settings,
+      validate_wg_key = _common.validate_wg_key,
+      run = _common.run;
 
 // Newest WireGuard handshake age in seconds for device `dev`, or null.
 function handshake_age(dev) {
@@ -39,7 +42,7 @@ function find_peer(uci, iface) {
 }
 
 // Build the runtime status object. `next_run` is filled in by the caller/scheduler.
-export function status(uci) {
+function status(uci) {
 	let s = load_settings(uci);
 	let iface = s.interface;
 
@@ -98,3 +101,5 @@ export function status(uci) {
 
 	return result;
 }
+
+return { status };

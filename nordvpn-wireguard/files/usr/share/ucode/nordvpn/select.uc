@@ -7,7 +7,7 @@
 import { rand } from 'math';
 
 // All relays matching country/city/hop_mode. city_code '' means any city.
-export function candidates(cache, country_code, city_code, hop_mode) {
+function candidates(cache, country_code, city_code, hop_mode) {
 	let out = [];
 	if (!cache || type(cache.countries) != 'array')
 		return out;
@@ -32,7 +32,7 @@ export function candidates(cache, country_code, city_code, hop_mode) {
 }
 
 // Find a specific relay by its gateway hostname.
-export function by_hostname(cache, hostname) {
+function by_hostname(cache, hostname) {
 	if (!cache || type(cache.countries) != 'array' || !hostname)
 		return null;
 	for (let country in cache.countries)
@@ -45,7 +45,7 @@ export function by_hostname(cache, hostname) {
 
 // Random pick from a list, optionally excluding a hostname (falls back to the
 // full list when the exclusion would leave nothing).
-export function pick(list, exclude_hostname) {
+function pick(list, exclude_hostname) {
 	if (type(list) != 'array' || length(list) == 0)
 		return null;
 	let pool = list;
@@ -56,3 +56,5 @@ export function pick(list, exclude_hostname) {
 	}
 	return pool[rand() % length(pool)];
 }
+
+return { candidates, by_hostname, pick };

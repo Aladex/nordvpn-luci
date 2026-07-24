@@ -253,13 +253,20 @@ function local_subnets(uci, skip) {
 				add(ifc.interface, a.address, a.mask);
 		}
 
-		// Pinned exception routes: static kernel routes in the main table
-		// (typically /32 pins for VPN endpoints that must never be tunnelled,
-		// added by user scripts). Mirror them so steered clients keep the
-		// exception too. Only on-device (needs ubus for the device mapping).
-		let rt = run([ 'ip', '-4', 'route', 'show', 'table', 'main', 'proto', 'static' ]);
-		if (rt.code == 0) {
-			for (let line in split(trim(rt.stdout || ''), '\n')) {
+		// Pinned exception routes: user-added routes of any prefix length in
+		// the main table (endpoints/subnets that must never be tunnelled).
+		// netifd/scripted routes carry proto static, hand-added `ip route add`
+		// ones carry proto boot — mirror both so steered clients keep the
+		// exceptions. Only on-device (needs ubus for the device mapping).
+		let pin_lines = [];
+		for (let proto in [ 'static', 'boot' ]) {
+			let rt = run([ 'ip', '-4', 'route', 'show', 'table', 'main', 'proto', proto ]);
+			if (rt.code == 0)
+				for (let l in split(trim(rt.stdout || ''), '\n'))
+					push(pin_lines, l);
+		}
+		{
+			for (let line in pin_lines) {
 				let m = match(line, /^([0-9.]+(\/[0-9]+)?) +via +([0-9.]+) +dev +([^ ]+)/);
 				let target = null, gw = null, dev = null;
 				if (m) {

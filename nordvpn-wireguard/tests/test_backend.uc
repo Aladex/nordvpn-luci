@@ -61,7 +61,9 @@ write_cache(cache, cpath);
 {
 	eq('ee single count', length(candidates(cache, 'ee', '', 'single')), 1);
 	eq('nl multihop count', length(candidates(cache, 'nl', '', 'multihop')), 1);
-	eq('nl single count', length(candidates(cache, 'nl', '', 'single')), 0);
+	eq('nl single count excludes onion', length(candidates(cache, 'nl', '', 'single')), 0);
+	eq('nl onion count', length(candidates(cache, 'nl', '', 'onion')), 1);
+	ok('onion relay is nl-onion1', candidates(cache, 'nl', '', 'onion')[0].hostname == 'nl-onion1.nordvpn.com');
 	ok('by_hostname hit', by_hostname(cache, 'ee70.nordvpn.com') != null);
 	ok('by_hostname miss', by_hostname(cache, 'nope.example') == null);
 	let picked = pick(candidates(cache, 'ee', '', 'single'), null);

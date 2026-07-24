@@ -17,6 +17,7 @@ const open_cmd = _common.open_cmd,
       CACHE_SCHEMA_VERSION = _common.CACHE_SCHEMA_VERSION,
       FETCH_STATUS_FILE = _common.FETCH_STATUS_FILE,
       CACHE_LOCK_FILE = _common.CACHE_LOCK_FILE,
+      relay_kind = _common.relay_kind,
       atomic_write = _common.atomic_write,
       acquire_lock = _common.acquire_lock,
       release_lock = _common.release_lock,
@@ -188,6 +189,14 @@ function add_server(acc, server) {
 	else if (entry_name && lc(entry_name) != lc(country_name))
 		multihop = true;
 
+	// Onion Over VPN: hostname cc-onionNN.nordvpn.com (exit through Tor).
+	// Kept out of both the single and multihop pools so it is an explicit choice.
+	let onion = false;
+	if (match(hostname, /^[a-z][a-z]-onion[0-9]+[.]nordvpn[.]com$/))
+		onion = true;
+	else if (friendly && match(friendly, / Onion #/))
+		onion = true;
+
 	push(city.relays, {
 		hostname: hostname,
 		ip_address: server.station || '',
@@ -198,6 +207,7 @@ function add_server(acc, server) {
 		port: DEFAULT_PORT,
 		active: true,
 		multihop: multihop,
+		onion: onion,
 		entry_country_code: entry_code,
 		entry_country: entry_name || (entry_code ? uc(entry_code) : null),
 		exit_country_code: country_code,
@@ -249,16 +259,24 @@ function locations_tree(cache) {
 	if (!cache || type(cache.countries) != 'array')
 		return out;
 	for (let c in cache.countries) {
-		let cities = [], cs = 0, cm = 0;
+		let cities = [], cs = 0, cm = 0, co = 0;
 		for (let city in c.cities) {
-			let s = 0, m = 0;
-			for (let r in city.relays)
-				r.multihop ? m++ : s++;
-			push(cities, { code: city.code, name: city.name, single: s, multi: m });
+			let s = 0, m = 0, o = 0;
+			for (let r in city.relays) {
+				let k = relay_kind(r);
+				if (k == 'multihop')
+					m++;
+				else if (k == 'onion')
+					o++;
+				else
+					s++;
+			}
+			push(cities, { code: city.code, name: city.name, single: s, multi: m, onion: o });
 			cs += s;
 			cm += m;
+			co += o;
 		}
-		push(out, { code: c.code, name: c.name, single: cs, multi: cm, cities: cities });
+		push(out, { code: c.code, name: c.name, single: cs, multi: cm, onion: co, cities: cities });
 	}
 	return out;
 }
@@ -269,7 +287,8 @@ function city_relays(cache, country_code, city_code, hop_mode) {
 	if (!cache || type(cache.countries) != 'array')
 		return out;
 	let cc = country_code ? lc(country_code) : null;
-	let want_multi = (hop_mode == 'multihop');
+	let want = (hop_mode == null || hop_mode == '') ? null
+		: (hop_mode == 'multihop' || hop_mode == 'onion') ? hop_mode : 'single';
 	for (let c in cache.countries) {
 		if (cc && lc(c.code) != cc)
 			continue;
@@ -277,9 +296,10 @@ function city_relays(cache, country_code, city_code, hop_mode) {
 			if (city.code != city_code)
 				continue;
 			for (let r in city.relays) {
-				let is_multi = r.multihop ? true : false;
-				if (hop_mode == null || hop_mode == '' || want_multi == is_multi)
-					push(out, { hostname: r.hostname, name: r.name, load: r.load, multihop: r.multihop });
+				let k = relay_kind(r);
+				if (want == null || k == want)
+					push(out, { hostname: r.hostname, name: r.name, load: r.load,
+						multihop: k == 'multihop', onion: k == 'onion' });
 			}
 			return out;
 		}

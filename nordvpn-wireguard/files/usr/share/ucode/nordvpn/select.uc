@@ -5,14 +5,17 @@
 'use strict';
 
 import { rand } from 'math';
+const relay_kind = require('nordvpn.common').relay_kind;
 
 // All relays matching country/city/hop_mode. city_code '' means any city.
+// hop_mode 'multihop' and 'onion' select exactly that kind; anything else
+// selects plain single-hop relays (Onion Over VPN is never picked implicitly).
 function candidates(cache, country_code, city_code, hop_mode) {
 	let out = [];
 	if (!cache || type(cache.countries) != 'array')
 		return out;
 
-	let want_multi = (hop_mode == 'multihop');
+	let want = (hop_mode == 'multihop' || hop_mode == 'onion') ? hop_mode : 'single';
 	let cc = (country_code && country_code != '') ? lc(country_code) : null;
 
 	for (let country in cache.countries) {
@@ -22,8 +25,7 @@ function candidates(cache, country_code, city_code, hop_mode) {
 			if (city_code && city_code != '' && city.code != city_code)
 				continue;
 			for (let relay in city.relays) {
-				let is_multi = relay.multihop ? true : false;
-				if (want_multi == is_multi)
+				if (relay_kind(relay) == want)
 					push(out, relay);
 			}
 		}

@@ -95,16 +95,29 @@ Installing `nordvpn-wireguard` alone gives a working CLI/service; add
 
    ![Credentials dialog](docs/screenshots/credentials-modal.png)
 
-3. Pick **Country** (required), optionally **City** and **Server**. Country
+3. Pick a **Hop mode**:
+   - **Single hop** — a regular VPN server.
+   - **Multihop** (Double VPN) — the selected country is the **exit** country
+     (your visible IP); traffic enters through the partner country shown in the
+     server name ("United Kingdom - Netherlands #10" enters in the UK and exits
+     in the Netherlands).
+   - **Onion over VPN** — traffic leaves the VPN server through the Tor
+     network. Noticeably slower, and some sites block Tor exit nodes. These
+     servers never appear in the other modes, so Tor is always an explicit
+     choice.
+
+   ![Onion over VPN mode](docs/screenshots/onion-mode.png)
+
+4. Pick **Country** (required), optionally **City** and **Server**. Country
    names carry emoji flags (plain names on systems without flag glyphs). Leave
    City and Server on *Automatic* to rotate within the country.
-4. Optionally enable **Automatic rotation** and a schedule. When rotation is
+5. Optionally enable **Automatic rotation** and a schedule. When rotation is
    active the page shows the concrete **Next rotation** time (router-scheduled,
    shown in your browser's local time zone).
 
    ![Automatic rotation](docs/screenshots/rotation.png)
 
-5. Click **Save and reconnect**.
+6. Click **Save and reconnect**.
 
 Get a token at
 <https://my.nordaccount.com/dashboard/nordvpn/manual-configuration/> →
@@ -122,7 +135,7 @@ config settings 'main'
 	option enabled '0'
 	option interface 'nordvpn'
 	option routing_table ''
-	option hop_mode 'single'          # or 'multihop'
+	option hop_mode 'single'          # 'multihop' (Double VPN) / 'onion' (via Tor)
 	option country_code 'ee'
 	option city_code 'ee-tallinn'
 	option fixed_server ''            # pin a gateway; disables rotation

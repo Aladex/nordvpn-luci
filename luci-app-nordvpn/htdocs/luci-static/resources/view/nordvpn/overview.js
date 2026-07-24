@@ -31,14 +31,10 @@ var STYLE = '' +
 	'.nv-radio-group{display:flex;align-items:center;gap:1.25em;flex-wrap:wrap;min-height:1.9em}' +
 	'.nv-radio-group label{display:inline-flex;align-items:center;gap:.4em;margin:0;font-weight:normal}' +
 	'.nv-check{display:inline-flex;align-items:center;gap:.4em;font-weight:normal}' +
-	'.nv-switch{position:relative;display:inline-block;width:2.7em;height:1.45em;flex:none;margin:0}' +
-	'.nv-switch input{opacity:0;width:0;height:0;position:absolute}' +
-	'.nv-slider{position:absolute;inset:0;background:#bbb;border-radius:1.45em;transition:.2s;cursor:pointer}' +
-	'.nv-slider:before{content:"";position:absolute;height:1.1em;width:1.1em;left:.2em;top:50%;transform:translateY(-50%);background:#fff;border-radius:50%;transition:.2s;box-shadow:0 1px 2px rgba(0,0,0,.35)}' +
-	'.nv-switch input:checked+.nv-slider{background:#0069d6}' +
-	'.nv-switch input:checked+.nv-slider:before{left:calc(100% - 1.3em)}' +
-	'.nv-switch-side{cursor:pointer}' +
-	'.nv-dim{color:var(--text-color-medium,#999)}' +
+	'.nv-seg{display:inline-flex;border:1px solid #0069d6;border-radius:1.2em;overflow:hidden}' +
+	'.nv-seg button{border:0;background:transparent;margin:0;padding:.3em 1.1em;cursor:pointer;font:inherit;color:inherit;line-height:1.3}' +
+	'.nv-seg button+button{border-left:1px solid #0069d6}' +
+	'.nv-seg button.active{background:#0069d6;color:#fff}' +
 	'.nv-token-field>div{display:block;width:100%}' +
 	'.nv-token-field .control-group{display:flex;width:100%}' +
 	'.nv-token-field .control-group input{flex:1 1 auto;width:100%}' +
@@ -140,6 +136,8 @@ return view.extend({
 			details.push(hs);
 		if (s.endpoint)
 			details.push(_('Endpoint: %s').format(s.endpoint));
+		if (s.gateway && /^[a-z]{2}-onion/.test(s.gateway))
+			details.push(_('🧅 Onion over VPN'));
 		if (s.rotation && s.rotation.enabled)
 			details.push(_('Automatic rotation is on'));
 
@@ -259,11 +257,19 @@ return view.extend({
 		this.serverSel = E('select', { class: 'cbi-input-select', change: L.bind(this.onServerChange, this), disabled: true });
 
 		var hop = uci.get('nordvpn', 'main', 'hop_mode') || 'single';
-		this.hopToggle = E('input', { type: 'checkbox', change: L.bind(this.onHopChange, this) });
-		this.hopToggle.checked = (hop === 'multihop');
-		this.hopSingleLbl = E('span', { class: 'nv-switch-side', click: L.bind(this.setHopMode, this, false) }, _('Single hop'));
-		this.hopMultiLbl = E('span', { class: 'nv-switch-side', click: L.bind(this.setHopMode, this, true) }, _('Multihop'));
-		this.updateHopLabels();
+		this.hopValue = (hop === 'multihop' || hop === 'onion') ? hop : 'single';
+		this.hopButtons = {};
+		var seg = E('div', { class: 'nv-seg' }, [
+			[ 'single', _('Single hop') ],
+			[ 'multihop', _('Multihop') ],
+			[ 'onion', _('Onion over VPN') ]
+		].map(L.bind(function(o) {
+			var b = E('button', { type: 'button', click: L.bind(this.setHopMode, this, o[0]) }, o[1]);
+			this.hopButtons[o[0]] = b;
+			return b;
+		}, this)));
+		this.hopNote = E('div', { class: 'cbi-value-description' });
+		this.updateHopButtons();
 
 		this.locNote = E('div', { class: 'cbi-value-description hidden' });
 
@@ -271,13 +277,7 @@ return view.extend({
 			E('legend', {}, _('Connection')),
 			E('div', { class: 'cbi-section-node' }, [
 				this.row(_('Credentials'), [ E('div', { class: 'nv-inline' }, [ credState, credBtn ]) ]),
-				this.row(_('Hop mode'), [
-					E('div', { class: 'nv-inline', style: 'gap:.6em;min-height:1.9em' }, [
-						this.hopSingleLbl,
-						E('label', { class: 'nv-switch' }, [ this.hopToggle, E('span', { class: 'nv-slider' }) ]),
-						this.hopMultiLbl
-					])
-				]),
+				this.row(_('Hop mode'), [ seg, this.hopNote ]),
 				this.row(_('Country'), [ this.countrySel, this.locNote ]),
 				this.row(_('City'), [ this.citySel ], _('Leave on Automatic to rotate within the country')),
 				this.row(_('Server'), [ this.serverSel ], _('Choosing a specific server disables automatic rotation'))
@@ -425,33 +425,47 @@ return view.extend({
 	/* ---- selection ---------------------------------------------------- */
 
 	hopMode: function() {
-		return this.hopToggle && this.hopToggle.checked ? 'multihop' : 'single';
+		return this.hopValue || 'single';
 	},
 
-	setHopMode: function(multi) {
-		if (this.hopToggle && this.hopToggle.checked !== multi) {
-			this.hopToggle.checked = multi;
-			this.onHopChange();
+	// Key of the per-mode gateway counters in the locations tree.
+	hopCountKey: function() {
+		var m = this.hopMode();
+		return m === 'multihop' ? 'multi' : (m === 'onion' ? 'onion' : 'single');
+	},
+
+	setHopMode: function(mode) {
+		if (this.hopValue === mode)
+			return;
+		this.hopValue = mode;
+		this.onHopChange();
+	},
+
+	updateHopButtons: function() {
+		var mode = this.hopMode();
+		for (var k in this.hopButtons)
+			this.hopButtons[k].classList.toggle('active', k === mode);
+		if (this.hopNote) {
+			var notes = {
+				multihop: _('Country is the exit country (your visible IP); traffic enters through the partner country shown in the server name.'),
+				onion: _('Traffic leaves the VPN server through the Tor network. Noticeably slower, and some sites block Tor exits.')
+			};
+			dom.content(this.hopNote, notes[mode] || '');
+			this.hopNote.classList.toggle('hidden', !notes[mode]);
 		}
-	},
-
-	updateHopLabels: function() {
-		var multi = (this.hopMode() === 'multihop');
-		if (this.hopSingleLbl) this.hopSingleLbl.classList.toggle('nv-dim', multi);
-		if (this.hopMultiLbl) this.hopMultiLbl.classList.toggle('nv-dim', !multi);
 	},
 
 	filteredCountries: function() {
 		var l = this.locations || {};
 		if (!Array.isArray(l.countries))
 			return [];
-		var multi = (this.hopMode() === 'multihop');
+		var key = this.hopCountKey();
 		var out = [];
 		l.countries.forEach(function(c) {
 			var cities = (c.cities || []).filter(function(city) {
-				return (multi ? city.multi : city.single) > 0;
+				return (city[key] || 0) > 0;
 			});
-			var count = multi ? c.multi : c.single;
+			var count = c[key] || 0;
 			if (cities.length && count > 0)
 				out.push(Object.assign({}, c, { cities: cities, gateway_count: count }));
 		});
@@ -498,11 +512,11 @@ return view.extend({
 		this._cityData = {};
 
 		if (c) {
+			var key = this.hopCountKey();
 			(c.cities || []).forEach(L.bind(function(city) {
 				this._cityData[city.code] = city;
-				var ccount = (this.hopMode() === 'multihop') ? city.multi : city.single;
 				this.citySel.appendChild(E('option', { value: city.code, selected: (city.code === chosenCity) || null },
-					'%s (%d)'.format(city.name, ccount)));
+					'%s (%d)'.format(city.name, city[key] || 0)));
 			}, this));
 		}
 		this.onCityChange();
@@ -538,7 +552,7 @@ return view.extend({
 
 	onHopChange: function() {
 		this.markDirty();
-		this.updateHopLabels();
+		this.updateHopButtons();
 		this.populateCountries();
 	},
 

@@ -90,6 +90,36 @@
     ]
   },
   {
+    "hostname": "nl-onion1.nordvpn.com",
+    "station": "192.0.2.50",
+    "name": "Netherlands Onion #1",
+    "load": 9,
+    "locations": [
+      {
+        "latitude": 52.37,
+        "longitude": 4.89,
+        "country": {
+          "name": "Netherlands",
+          "code": "NL",
+          "city": {
+            "name": "Amsterdam"
+          }
+        }
+      }
+    ],
+    "technologies": [
+      {
+        "identifier": "wireguard_udp",
+        "metadata": [
+          {
+            "name": "public_key",
+            "value": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDQ="
+          }
+        ]
+      }
+    ]
+  },
+  {
     "hostname": "xx1.nordvpn.com",
     "station": "192.0.2.40",
     "name": "NoWireGuard #1",

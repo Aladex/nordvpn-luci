@@ -6,7 +6,7 @@ config settings 'main'
 	option interface 'nordvpn'
 	# Optional custom routing table (ip4table/ip6table). Empty = main table.
 	option routing_table ''
-	# 'single' or 'multihop'.
+	# 'single', 'multihop' (Double VPN) or 'onion' (Onion Over VPN via Tor).
 	option hop_mode 'single'
 	# Two-letter country code and 'cc-cityslug' city code for server selection.
 	option country_code ''

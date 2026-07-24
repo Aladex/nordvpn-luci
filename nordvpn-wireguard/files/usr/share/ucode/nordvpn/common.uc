@@ -106,7 +106,20 @@ function validate_port(p) {
 }
 
 function validate_hop_mode(m) {
-	return (m == 'single' || m == 'multihop') ? m : null;
+	return (m == 'single' || m == 'multihop' || m == 'onion') ? m : null;
+}
+
+// Classify a relay from the normalized cache: 'multihop' (Double VPN),
+// 'onion' (Onion Over VPN) or 'single'. Falls back to the hostname pattern so
+// caches written before the onion flag existed still classify correctly.
+function relay_kind(r) {
+	if (!r)
+		return 'single';
+	if (r.multihop)
+		return 'multihop';
+	if (r.onion || match(r.hostname || '', /^[a-z][a-z]-onion[0-9]+[.]/))
+		return 'onion';
+	return 'single';
 }
 
 function validate_rotation_mode(m) {
@@ -316,7 +329,7 @@ return {
 	MIN_ROTATION_INTERVAL, MAX_ROTATION_INTERVAL, MIN_CACHE_REFRESH, MAX_CACHE_REFRESH,
 	MIN_VERIFY_TIMEOUT, MAX_VERIFY_TIMEOUT,
 	bounded_int, validate_interface, validate_token, validate_wg_key, validate_hostname,
-	validate_port, validate_hop_mode, validate_rotation_mode, validate_interval, validate_time,
+	validate_port, validate_hop_mode, relay_kind, validate_rotation_mode, validate_interval, validate_time,
 	validate_country_code, validate_location_code, validate_routing_table, validate_dir,
 	load_settings, cache_file_path, iso_ts, redact, log,
 	atomic_write, acquire_lock, release_lock, sh_quote, open_cmd, run

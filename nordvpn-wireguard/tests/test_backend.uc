@@ -127,6 +127,21 @@ write_cache(cache, cpath);
 	eq('plan respects limit', length(plan_candidates(cache, s_nl, null, 0) || []) <= 1, true);
 }
 
+// 6b. rotation state persistence: the daemon's attempt clock survives a restart
+//     and neither writer clobbers the other's timestamp.
+{
+	unlink('/tmp/nordvpn_rotate_state.json');
+	eq('last_attempt 0 when no state', _rotate.last_attempt_ts(), 0);
+	_rotate.mark_attempt(1000);
+	eq('last_attempt persisted', _rotate.last_attempt_ts(), 1000);
+	_rotate.record({ last_success: 2000, server: 'ee70.nordvpn.com' });
+	eq('record keeps last_attempt', _rotate.last_attempt_ts(), 1000);
+	eq('record merged last_success', _rotate.read_state().last_success, 2000);
+	_rotate.mark_attempt(3000);
+	eq('mark_attempt keeps last_success', _rotate.read_state().last_success, 2000);
+	unlink('/tmp/nordvpn_rotate_state.json');
+}
+
 // 7. scheduler decisions (pure)
 {
 	let s = { cache_refresh_interval: 21600, enabled: true, rotation_enabled: true,

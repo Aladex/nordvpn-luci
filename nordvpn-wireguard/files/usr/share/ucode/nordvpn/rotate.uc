@@ -12,24 +12,22 @@ import { cursor } from 'uci';
 const _common = require('nordvpn.common');
 const load_settings = _common.load_settings,
       cache_file_path = _common.cache_file_path,
-      ping_through = _common.ping_through,
       iso_ts = _common.iso_ts,
       atomic_write = _common.atomic_write,
       acquire_lock = _common.acquire_lock,
       release_lock = _common.release_lock,
-      run = _common.run,
       log = _common.log;
 const read_cache = require('nordvpn.cache').read_cache;
 const candidates = require('nordvpn.select').candidates;
 const _apply = require('nordvpn.apply');
-const write_relay = _apply.write_relay,
-      bring_up = _apply.bring_up,
+const bring_up = _apply.bring_up,
       current_peer = _apply.current_peer,
-      restore_peer = _apply.restore_peer;
+      restore_peer = _apply.restore_peer,
+      connect_one = _apply.connect_one,
+      verify_handshake = _apply.verify_handshake;
 
 const ROTATE_LOCK = '/tmp/nordvpn_rotate.lock';
 const ROTATE_STATE = '/tmp/nordvpn_rotate_state.json';
-const SETTLE_SECONDS = 3;
 
 // Fisher-Yates shuffle (in a copy). Exported for testing.
 function shuffle(list) {
@@ -55,7 +53,7 @@ function plan_candidates(cache, settings, current_gateway, limit) {
 	return list;
 }
 
-// Last rotation state ({ last_success, server, updated_at }) or null.
+// Last rotation state ({ last_attempt, last_success, server, updated_at }) or null.
 function read_state() {
 	let f = readfile(ROTATE_STATE);
 	if (!f)
@@ -67,9 +65,30 @@ function read_state() {
 	}
 }
 
-function write_state(obj) {
-	obj.updated_at = iso_ts();
-	atomic_write(ROTATE_STATE, sprintf('%J', obj));
+// Merge fields into the persisted state and rewrite it atomically. Callers only
+// touch the keys they own (the daemon writes last_attempt; the worker writes
+// last_success + server), so neither clobbers the other's timestamp.
+function record(fields) {
+	let st = read_state() || {};
+	for (let k in fields)
+		st[k] = fields[k];
+	st.updated_at = iso_ts();
+	atomic_write(ROTATE_STATE, sprintf('%J', st));
+	return st;
+}
+
+// Epoch of the last rotation attempt (0 when unknown). The daemon schedules from
+// this persisted value instead of an in-memory counter, so a restart — e.g.
+// after every config save — does not reset the rotation clock and fire again.
+function last_attempt_ts() {
+	let st = read_state();
+	return (st && type(st.last_attempt) == 'int') ? st.last_attempt : 0;
+}
+
+// Record that a rotation was attempted at `ts`. The daemon calls this before it
+// forks the worker so overlapping ticks cannot double-fire.
+function mark_attempt(ts) {
+	record({ last_attempt: ts });
 }
 
 function rotate_inner(uci) {
@@ -90,13 +109,13 @@ function rotate_inner(uci) {
 		return { error: 'no candidate servers for the current selection' };
 
 	for (let relay in plan) {
-		write_relay(uci, iface, relay, s);
-		uci.commit('network');
-		if (!bring_up(iface))
+		if (!connect_one(uci, iface, relay, s))
 			continue;
-		run([ 'sleep', '' + SETTLE_SECONDS ]);
-		if (ping_through(iface, s.ping_count, s.ping_timeout)) {
-			write_state({ last_success: time(), server: relay.hostname });
+		// Verify the tunnel by its WireGuard handshake, not by a ping routed
+		// through it: NordVPN publishes dead endpoints, and a routed ping can
+		// fail on a perfectly good server, which made rotation cycle servers.
+		if (verify_handshake(iface, 5)) {
+			record({ last_success: time(), server: relay.hostname });
 			log('rotated to ' + relay.hostname);
 			return { ok: true, server: relay.hostname };
 		}
@@ -128,4 +147,4 @@ function rotate(uci) {
 	return res;
 }
 
-return { shuffle, plan_candidates, read_state, rotate };
+return { shuffle, plan_candidates, read_state, record, last_attempt_ts, mark_attempt, rotate };

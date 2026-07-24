@@ -242,4 +242,4 @@ function apply(uci) {
 		error: 'could not reach any server for the current selection; restored the previous connection' };
 }
 
-return { set_credentials, current_peer, restore_peer, write_relay, bring_up, apply };
+return { set_credentials, current_peer, restore_peer, write_relay, bring_up, verify_handshake, connect_one, apply };

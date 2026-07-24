@@ -16,7 +16,10 @@ const load_settings = _common.load_settings,
 const _cache = require('nordvpn.cache');
 const fetch_and_build = _cache.fetch_and_build,
       cache_is_stale = _cache.cache_is_stale;
-const rotate = require('nordvpn.rotate').rotate;
+const _rotate = require('nordvpn.rotate');
+const rotate = _rotate.rotate,
+      last_attempt_ts = _rotate.last_attempt_ts,
+      mark_attempt = _rotate.mark_attempt;
 const _service = require('nordvpn.service');
 const should_refresh = _service.should_refresh,
       should_rotate = _service.should_rotate;
@@ -24,7 +27,6 @@ const should_refresh = _service.should_refresh,
 uloop.init();
 
 let last_cache = 0;
-let last_rotate = 0;
 
 function tick() {
 	// Fresh cursor each tick so committed config changes are picked up.
@@ -37,10 +39,18 @@ function tick() {
 		uloop.task(function() { fetch_and_build(path); });
 	}
 
+	// The rotation clock is persisted (nordvpn.rotate state), not in memory:
+	// procd restarts this daemon on every config change, and an in-memory
+	// counter would reset to 0 each time and make should_rotate() fire on the
+	// next tick. The first time rotation is active we only start the clock, so
+	// enabling rotation waits a full interval instead of rotating immediately.
+	let last = last_attempt_ts();
 	let lt = localtime();
 	let hm = sprintf('%02d:%02d', lt.hour, lt.min);
-	if (should_rotate(s, last_rotate, now, hm)) {
-		last_rotate = now;
+	if (last == 0 && s.enabled && s.rotation_enabled && !(s.fixed_server && s.fixed_server != '')) {
+		mark_attempt(now);
+	} else if (should_rotate(s, last, now, hm)) {
+		mark_attempt(now);
 		uloop.task(function() { rotate(); });
 	}
 }

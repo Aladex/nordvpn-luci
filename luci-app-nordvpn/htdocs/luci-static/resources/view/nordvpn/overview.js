@@ -27,6 +27,13 @@ var STYLE = '' +
 	'.nv-status-actions{margin-top:.7em;display:flex;gap:.5em;flex-wrap:wrap}' +
 	'.nv-mono{font-family:monospace}' +
 	'.nv-inline-note{font-style:italic;color:var(--text-color-medium,#666)}' +
+	'.nv-inline{display:flex;align-items:center;gap:.75em;flex-wrap:wrap}' +
+	'.nv-radio-group{display:flex;align-items:center;gap:1.25em;flex-wrap:wrap;min-height:1.9em}' +
+	'.nv-radio-group label{display:inline-flex;align-items:center;gap:.4em;margin:0;font-weight:normal}' +
+	'.nv-check{display:inline-flex;align-items:center;gap:.4em;font-weight:normal}' +
+	'.nv-token-field>div{display:block;width:100%}' +
+	'.nv-token-field .control-group{display:flex;width:100%}' +
+	'.nv-token-field .control-group input{flex:1 1 auto;width:100%}' +
 	'details.nv-advanced>summary{cursor:pointer;font-weight:700;padding:.3em 0}' +
 	'.hidden{display:none!important}';
 
@@ -89,14 +96,35 @@ return view.extend({
 		return _('Handshake %d minutes ago').format(Math.floor(sec / 60));
 	},
 
+	// Resolve a country code and a city slug to display names from the loaded
+	// locations tree, falling back to the raw codes when the list is missing.
+	locationNames: function(cc, citySlug) {
+		var l = this.locations || {};
+		var countries = Array.isArray(l.countries) ? l.countries : [];
+		var country = cc, city = citySlug;
+		countries.forEach(function(c) {
+			if (c.code !== cc)
+				return;
+			country = c.name || cc;
+			(c.cities || []).forEach(function(ct) {
+				if (ct.code === citySlug)
+					city = ct.name || citySlug;
+			});
+		});
+		return [ country, city ];
+	},
+
 	updateStatusBand: function() {
 		var s = this.status || {};
 		var loc = s.location || {};
 		var info = this.stateInfo(s.state || 'not_configured');
 
-		var locText = [ loc.country, loc.city ].filter(Boolean).join(' / ');
+		var locText = this.locationNames(loc.country, loc.city).filter(Boolean).join(' / ');
 		if (s.gateway)
 			locText = locText ? (locText + ' / ' + s.gateway) : s.gateway;
+		var flag = this.countryFlag(loc.country);
+		if (flag && locText)
+			locText = flag + ' ' + locText;
 
 		var details = [];
 		var hs = this.fmtHandshake(s.latest_handshake_seconds);
@@ -138,6 +166,8 @@ return view.extend({
 		return callStatus().then(L.bind(function(s) {
 			this.status = s || {};
 			this.updateStatusBand();
+			if (this.rotNextSpan)
+				dom.content(this.rotNextSpan, this.nextRotationText());
 		}, this)).catch(function() {});
 	},
 
@@ -230,10 +260,12 @@ return view.extend({
 		var section = E('fieldset', { class: 'cbi-section' }, [
 			E('legend', {}, _('Connection')),
 			E('div', { class: 'cbi-section-node' }, [
-				this.row(_('Credentials'), [ credState, ' ', credBtn ]),
+				this.row(_('Credentials'), [ E('div', { class: 'nv-inline' }, [ credState, credBtn ]) ]),
 				this.row(_('Hop mode'), [
-					E('label', {}, [ this.hopSingle, ' ', _('Single hop') ]),
-					E('label', { style: 'margin-left:1em' }, [ this.hopMulti, ' ', _('Multihop') ])
+					E('div', { class: 'nv-radio-group' }, [
+						E('label', {}, [ this.hopSingle, _('Single hop') ]),
+						E('label', {}, [ this.hopMulti, _('Multihop') ])
+					])
 				]),
 				this.row(_('Country'), [ this.countrySel, this.locNote ]),
 				this.row(_('City'), [ this.citySel ], _('Leave on Automatic to rotate within the country')),
@@ -270,19 +302,21 @@ return view.extend({
 
 		this.rotFixedNote = E('div', { class: 'cbi-value-description nv-inline-note hidden' }, _('Automatic rotation is unavailable while a specific server is selected.'));
 		this.rotModeRow = this.row(_('Schedule'), [
-			E('label', {}, [ this.rotModeInterval, ' ', _('Every N hours') ]),
-			E('label', { style: 'margin-left:1em' }, [ this.rotModeTime, ' ', _('At specific time') ])
+			E('div', { class: 'nv-radio-group' }, [
+				E('label', {}, [ this.rotModeInterval, _('Every N hours') ]),
+				E('label', {}, [ this.rotModeTime, _('At specific time') ])
+			])
 		]);
 		this.rotIntervalRow = this.row(_('Rotation interval'), [ this.rotInterval ]);
 		this.rotTimeRow = this.row(_('Rotation time'), [ this.rotTime ], _('Router local time'));
-		this.rotNextRow = this.row(_('Next rotation'), [ E('span', { }, this.nextRotationText()) ]);
+		this.rotNextSpan = E('span', {}, this.nextRotationText());
+		this.rotNextRow = this.row(_('Next rotation'), [ this.rotNextSpan ]);
 
 		var section = E('fieldset', { class: 'cbi-section', id: 'nv-rotation' }, [
 			E('legend', {}, _('Automatic rotation')),
 			E('div', { class: 'cbi-section-node' }, [
 				this.row(_('Automatic rotation'), [
-					this.rotEnable, ' ',
-					E('label', { style: 'font-weight:normal' }, _('Change server automatically on a schedule')),
+					E('label', { class: 'nv-check' }, [ this.rotEnable, _('Change server automatically on a schedule') ]),
 					this.rotFixedNote
 				]),
 				this.rotModeRow, this.rotIntervalRow, this.rotTimeRow, this.rotNextRow
@@ -295,11 +329,30 @@ return view.extend({
 
 	nextRotationText: function() {
 		var s = this.status || {};
-		if (!s.rotation || !s.rotation.enabled)
+		var r = s.rotation || {};
+		if (!r.enabled)
 			return _('Disabled');
-		if (s.rotation.next_run)
-			return s.rotation.next_run;
-		return _('On schedule');
+		if (!r.next_run)
+			return _('On schedule');
+		var d = new Date(r.next_run * 1000);
+		var diff = Math.floor((d.getTime() - Date.now()) / 1000);
+		if (diff < 90)
+			return '%s (%s)'.format(d.toLocaleString(), _('due now'));
+		var h = Math.floor(diff / 3600), m = Math.floor((diff % 3600) / 60);
+		var rel = h > 0 ? _('in %dh %dm').format(h, m) : _('in %dm').format(m);
+		return '%s (%s)'.format(d.toLocaleString(), rel);
+	},
+
+	// "hr" -> 🇭🇷 via regional-indicator codepoints. Returns '' for anything
+	// that is not two ASCII letters, so malformed codes fall back to the
+	// plain name.
+	countryFlag: function(code) {
+		if (typeof code !== 'string' || !/^[A-Za-z]{2}$/.test(code))
+			return '';
+		var c = code.toLowerCase();
+		return String.fromCodePoint(
+			0x1F1E6 + (c.charCodeAt(0) - 97),
+			0x1F1E6 + (c.charCodeAt(1) - 97));
 	},
 
 	buildAdvanced: function() {
@@ -311,14 +364,16 @@ return view.extend({
 				_('Name of the managed WireGuard interface')),
 			this.row(_('Routing table'), [ this.input('routing_table', 'text', g('routing_table', ''), { placeholder: 'main' }) ],
 				_('Custom routing table (leave empty for the main table)')),
-			this.row(_('Ping count'), [ this.input('ping_count', 'number', g('ping_count', '10'), { min: 1, max: 60, style: 'width:80px' }) ]),
-			this.row(_('Ping timeout'), [ this.input('ping_timeout', 'number', g('ping_timeout', '2'), { min: 1, max: 60, style: 'width:80px' }) ]),
+			this.row(_('Connection wait (seconds)'), [ this.input('verify_timeout', 'number', g('verify_timeout', '8'), { min: 2, max: 30, style: 'width:80px' }) ],
+				_('How long to wait for a WireGuard handshake before trying the next server')),
 			this.row(_('Max server attempts'), [ this.input('max_retries', 'number', g('max_retries', '10'), { min: 1, max: 50, style: 'width:80px' }) ]),
 			this.row(_('Cache directory'), [ this.input('cache_dir', 'text', g('cache_dir', ''), { placeholder: '/tmp' }) ],
 				_('Where to store the downloaded server list (leave empty for /tmp)')),
 			this.row(_('Server cache'), [
-				this.cacheRow, ' ',
-				E('button', { class: 'cbi-button', click: L.bind(this.refreshCache, this) }, _('Refresh server list'))
+				E('div', { class: 'nv-inline' }, [
+					this.cacheRow,
+					E('button', { class: 'cbi-button', click: L.bind(this.refreshCache, this) }, _('Refresh server list'))
+				])
 			])
 		]);
 
@@ -398,8 +453,9 @@ return view.extend({
 		this._countryData = {};
 		countries.forEach(L.bind(function(c) {
 			this._countryData[c.code] = c;
+			var flag = this.countryFlag(c.code);
 			sel.appendChild(E('option', { value: c.code, selected: (c.code === chosen) || null },
-				'%s (%d)'.format(c.name, c.gateway_count || 0)));
+				(flag ? flag + ' ' : '') + '%s (%d)'.format(c.name, c.gateway_count || 0)));
 		}, this));
 
 		this.onCountryChange();
@@ -507,7 +563,7 @@ return view.extend({
 			else
 				uci.set('nordvpn', 'main', o, v);
 		};
-		[ 'interface', 'routing_table', 'cache_dir', 'ping_count', 'ping_timeout', 'max_retries' ].forEach(L.bind(function(k) {
+		[ 'interface', 'routing_table', 'cache_dir', 'verify_timeout', 'max_retries' ].forEach(L.bind(function(k) {
 			if (this.refs[k]) setv(k, (this.refs[k].value || '').trim());
 		}, this));
 
@@ -568,26 +624,28 @@ return view.extend({
 	/* ---- credentials -------------------------------------------------- */
 
 	showCredentialModal: function() {
-		var input = E('input', { type: 'password', class: 'cbi-input-text', autocomplete: 'off', style: 'width:100%' });
+		// LuCI's password Textfield renders the input with an inline reveal
+		// button in one control-group row.
+		var field = new ui.Textfield('', {
+			password: true,
+			placeholder: _('64-character hexadecimal token')
+		});
 		var err = E('div', { class: 'cbi-value-description', style: 'color:var(--error-color,#c0392b)' });
-		var reveal = E('button', { class: 'cbi-button', click: function() {
-			input.type = (input.type === 'password') ? 'text' : 'password';
-		} }, _('Show'));
 
 		ui.showModal(_('NordVPN credentials'), [
 			E('p', {}, _('Paste your 64-character NordVPN access token. It is used once to derive the WireGuard private key and is never stored or shown again.')),
-			E('div', { class: 'cbi-value' }, [ input, ' ', reveal ]),
+			E('div', { class: 'cbi-value nv-token-field' }, [ field.render() ]),
 			err,
 			E('div', { class: 'right' }, [
 				E('button', { class: 'cbi-button', click: ui.hideModal }, _('Cancel')),
 				' ',
-				E('button', { class: 'cbi-button cbi-button-action', click: L.bind(this.submitCredentials, this, input, err) }, _('Save credentials'))
+				E('button', { class: 'cbi-button cbi-button-action', click: L.bind(this.submitCredentials, this, field, err) }, _('Save credentials'))
 			])
 		]);
 	},
 
-	submitCredentials: function(input, err, ev) {
-		var token = (input.value || '').trim();
+	submitCredentials: function(field, err, ev) {
+		var token = (field.getValue() || '').trim();
 		if (!token.match(/^[0-9a-fA-F]{64}$/)) {
 			dom.content(err, _('Enter a valid 64-character hexadecimal token.'));
 			return;

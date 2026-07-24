@@ -142,29 +142,37 @@ return view.extend({
 	},
 
 	reconnect: function() {
-		this.notice(_('Reconnecting…'), 'info');
+		var n = this.notice(_('Reconnecting…'), 'info');
 		return callApply().then(L.bind(function(res) {
+			this.dismiss(n);
 			if (res && res.error)
 				this.notice(_('Reconnect failed: %s').format(res.error), 'error');
+			else if (res && res.state === 'success')
+				this.notice(_('Connected to %s').format(res.gateway || ''), 'info', 4000);
 			else if (res && res.state === 'partial_failure')
-				this.notice(_('Saved, but the interface did not start. Check the system log.'), 'error');
+				this.notice(_('Interface is up, but the server did not respond.'), 'error');
+			else
+				this.notice(_('Could not connect: %s').format((res && res.error) || _('unknown error')), 'error');
 			return this.refreshStatus();
 		}, this)).catch(L.bind(function(e) {
+			this.dismiss(n);
 			this.notice(_('Reconnect failed: %s').format(e), 'error');
 		}, this));
 	},
 
 	rotateNow: function() {
-		this.notice(_('Rotating to another server…'), 'info');
+		var n = this.notice(_('Rotating to another server…'), 'info');
 		return callRotateNow().then(L.bind(function(res) {
+			this.dismiss(n);
 			if (res && res.ok)
-				this.notice(_('Rotated to %s').format(res.server), 'info');
+				this.notice(_('Rotated to %s').format(res.server), 'info', 4000);
 			else if (res && res.skipped)
-				this.notice(_('Rotation skipped: %s').format(res.reason || ''), 'info');
+				this.notice(_('Rotation skipped: %s').format(res.reason || ''), 'info', 4000);
 			else
 				this.notice(_('Rotation failed: %s').format((res && res.error) || _('unknown error')), 'error');
 			return this.refreshStatus();
 		}, this)).catch(L.bind(function(e) {
+			this.dismiss(n);
 			this.notice(_('Rotation failed: %s').format(e), 'error');
 		}, this));
 	},
@@ -528,25 +536,30 @@ return view.extend({
 		this.collectIntoUci();
 		this.saveBtn.disabled = true;
 		this.discardBtn.disabled = true;
-		this.notice(_('Saving configuration…'), 'info');
+		var p = this.notice(_('Saving configuration…'), 'info');
 
 		return uci.save()
 			.then(function() { return uci.apply(); })
 			.then(L.bind(function() {
 				this.dirty = false;
-				this.notice(_('Applying and reconnecting…'), 'info');
+				this.dismiss(p);
+				p = this.notice(_('Applying and reconnecting…'), 'info');
 				return callApply();
 			}, this))
 			.then(L.bind(function(res) {
+				this.dismiss(p);
 				if (res && res.error)
 					this.notice(_('Apply failed: %s').format(res.error), 'error');
+				else if (res && res.state === 'success')
+					this.notice(_('Connected to %s').format(res.gateway || ''), 'info', 4000);
 				else if (res && res.state === 'partial_failure')
-					this.notice(_('Configuration saved, but the interface did not start. Check the system log.'), 'error');
+					this.notice(_('Configuration saved, but the server did not respond.'), 'error');
 				else
-					this.notice(_('Configuration applied. Waiting for the tunnel handshake…'), 'info');
+					this.notice(_('Could not connect: %s').format((res && res.error) || _('unknown error')), 'error');
 				return this.refreshStatus();
 			}, this))
 			.catch(L.bind(function(e) {
+				this.dismiss(p);
 				this.notice(_('Save failed: %s').format(e), 'error');
 			}, this));
 	},
@@ -632,7 +645,17 @@ return view.extend({
 
 	/* ---- helpers ------------------------------------------------------ */
 
-	notice: function(text, kind) {
-		ui.addNotification(null, E('p', {}, text), kind || 'info');
+	notice: function(text, kind, timeout) {
+		var node = ui.addNotification(null, E('p', {}, text), kind || 'info');
+		if (timeout)
+			setTimeout(L.bind(this.dismiss, this, node), timeout);
+		return node;
+	},
+
+	dismiss: function(node) {
+		try {
+			if (node && node.parentNode)
+				node.parentNode.removeChild(node);
+		} catch (e) {}
 	}
 });

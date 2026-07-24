@@ -11,14 +11,16 @@
  * (nordvpn-wireguard); performs no direct privileged filesystem or network ops.
  */
 
-var callStatus = rpc.declare({ object: 'nordvpn', method: 'status' });
+var callInstances = rpc.declare({ object: 'nordvpn', method: 'instances' });
 var callLocations = rpc.declare({ object: 'nordvpn', method: 'locations' });
 var callServers = rpc.declare({ object: 'nordvpn', method: 'servers', params: [ 'country', 'city', 'hop_mode' ] });
 var callRefreshStatus = rpc.declare({ object: 'nordvpn', method: 'refresh_status' });
-var callSetCredentials = rpc.declare({ object: 'nordvpn', method: 'set_credentials', params: [ 'token' ] });
-var callApply = rpc.declare({ object: 'nordvpn', method: 'apply' });
+var callSetCredentials = rpc.declare({ object: 'nordvpn', method: 'set_credentials', params: [ 'token', 'instance' ] });
+var callApply = rpc.declare({ object: 'nordvpn', method: 'apply', params: [ 'instance' ] });
 var callRefreshLocations = rpc.declare({ object: 'nordvpn', method: 'refresh_locations' });
-var callRotateNow = rpc.declare({ object: 'nordvpn', method: 'rotate_now' });
+var callRotateNow = rpc.declare({ object: 'nordvpn', method: 'rotate_now', params: [ 'instance' ] });
+var callCreateInstance = rpc.declare({ object: 'nordvpn', method: 'create_instance', params: [ 'instance' ] });
+var callDeleteInstance = rpc.declare({ object: 'nordvpn', method: 'delete_instance', params: [ 'instance' ] });
 
 var STYLE = '' +
 	'.nv-status-main{display:flex;flex-wrap:wrap;align-items:baseline;gap:.75em;font-size:1.05em}' +
@@ -49,26 +51,31 @@ return view.extend({
 	load: function() {
 		return Promise.all([
 			uci.load('nordvpn'),
-			callStatus().catch(function() { return {}; }),
+			callInstances().catch(function() { return { instances: [] }; }),
 			callLocations().catch(function() { return { available: false }; }),
 			callRefreshStatus().catch(function() { return { state: 'idle' }; })
 		]);
 	},
 
 	render: function(data) {
-		this.status = data[1] || {};
+		this.instances = (data[1] && data[1].instances) || [];
+		this.instance = this.instances.length ? this.instances[0].instance : 'main';
+		this.status = this.instances[0] || {};
 		this.locations = data[2] || { available: false };
 		this.dirty = false;
 		this.refs = {};
 
+		this.instancesNode = E('div');
 		this.statusNode = E('div');
 		this.formNode = E('div');
+		this.updateInstancesTable();
 		this.updateStatusBand();
 		dom.content(this.formNode, this.buildFormSections());
 
 		var container = E('div', {}, [
 			E('style', {}, STYLE),
 			E('h2', {}, _('NordVPN')),
+			this.instancesNode,
 			this.statusNode,
 			this.formNode,
 			this.buildActions()
@@ -76,6 +83,159 @@ return view.extend({
 
 		poll.add(L.bind(this.refreshStatus, this), 5);
 		return container;
+	},
+
+	/* ---- instances ----------------------------------------------------- */
+
+	statusOf: function(name) {
+		var found = null;
+		(this.instances || []).forEach(function(st) {
+			if (st.instance === name)
+				found = st;
+		});
+		return found;
+	},
+
+	updateInstancesTable: function() {
+		var rows = [ E('tr', { class: 'tr table-titles' }, [
+			E('th', { class: 'th' }, _('Instance')),
+			E('th', { class: 'th' }, _('Status')),
+			E('th', { class: 'th' }, _('Server')),
+			E('th', { class: 'th' }, _('Next rotation')),
+			E('th', { class: 'th' }, '')
+		]) ];
+
+		(this.instances || []).forEach(L.bind(function(st) {
+			var info = this.stateInfo(st.state || 'not_configured');
+			var loc = st.location || {};
+			var flag = this.countryFlag(loc.country);
+			var selected = (st.instance === this.instance);
+			var r = st.rotation || {};
+			var next = '';
+			if (r.enabled && r.next_run)
+				next = new Date(r.next_run * 1000).toLocaleTimeString();
+			else if (r.enabled)
+				next = _('on schedule');
+
+			rows.push(E('tr', {
+				class: 'tr',
+				style: selected ? 'font-weight:bold' : 'cursor:pointer',
+				click: L.bind(this.selectInstance, this, st.instance)
+			}, [
+				E('td', { class: 'td' }, (selected ? '▸ ' : '') + st.instance),
+				E('td', { class: 'td', style: 'color:' + info.color }, info.label),
+				E('td', { class: 'td' }, (flag ? flag + ' ' : '') + (st.gateway || '—')),
+				E('td', { class: 'td' }, next),
+				E('td', { class: 'td' }, st.instance === 'main' ? '' : E('button', {
+					class: 'cbi-button cbi-button-remove',
+					click: L.bind(this.showDeleteInstanceModal, this, st.instance)
+				}, _('Delete')))
+			]));
+		}, this));
+
+		dom.content(this.instancesNode, E('fieldset', { class: 'cbi-section' }, [
+			E('legend', {}, _('VPN instances')),
+			E('div', { class: 'cbi-section-node' }, [
+				E('table', { class: 'table' }, rows),
+				E('div', { style: 'margin-top:.5em' }, [
+					E('button', { class: 'cbi-button cbi-button-add', click: L.bind(this.showAddInstanceModal, this) },
+						_('Add instance'))
+				])
+			])
+		]));
+	},
+
+	selectInstance: function(name) {
+		if (name === this.instance)
+			return;
+		if (this.dirty && !window.confirm(_('Discard unsaved changes?')))
+			return;
+		this.instance = name;
+		this.dirty = false;
+		if (this.saveBtn) this.saveBtn.disabled = true;
+		if (this.discardBtn) this.discardBtn.disabled = true;
+		this.status = this.statusOf(name) || {};
+		this.updateInstancesTable();
+		this.updateStatusBand();
+		dom.content(this.formNode, this.buildFormSections());
+	},
+
+	showAddInstanceModal: function() {
+		var input = E('input', { type: 'text', class: 'cbi-input-text', placeholder: _('e.g. media') });
+		var err = E('div', { class: 'cbi-value-description', style: 'color:var(--error-color,#c0392b)' });
+		ui.showModal(_('Add VPN instance'), [
+			E('p', {}, _('A new instance runs its own tunnel on its own WireGuard interface with its own credentials and schedule. Issue a separate NordVPN access token for it — reusing one key elsewhere has been known to get it locked.')),
+			E('div', { class: 'cbi-value' }, [ input ]),
+			err,
+			E('div', { class: 'right' }, [
+				E('button', { class: 'cbi-button', click: ui.hideModal }, _('Cancel')),
+				' ',
+				E('button', { class: 'cbi-button cbi-button-action', click: L.bind(this.addInstance, this, input, err) }, _('Add'))
+			])
+		]);
+	},
+
+	addInstance: function(input, err) {
+		var name = (input.value || '').trim();
+		if (!/^[A-Za-z0-9_]{1,12}$/.test(name)) {
+			dom.content(err, _('Use 1-12 letters, digits or underscores.'));
+			return;
+		}
+		return callCreateInstance(name).then(L.bind(function(res) {
+			if (res && res.error) {
+				dom.content(err, res.error);
+				return;
+			}
+			ui.hideModal();
+			uci.unload('nordvpn');
+			return uci.load('nordvpn').then(L.bind(function() {
+				return this.refreshStatus();
+			}, this)).then(L.bind(function() {
+				this.selectInstance(name);
+				this.notice(_('Instance "%s" created. Set its credentials and pick a country, then save.').format(name), 'info', 6000);
+			}, this));
+		}, this)).catch(L.bind(function(e) {
+			dom.content(err, '' + e);
+		}, this));
+	},
+
+	showDeleteInstanceModal: function(name, ev) {
+		if (ev)
+			ev.stopPropagation();
+		ui.showModal(_('Delete instance "%s"?').format(name), [
+			E('p', {}, _('The tunnel is taken down and its interface, firewall objects and settings are removed. LAN traffic routed through it will fall back to your other routes.')),
+			E('div', { class: 'right' }, [
+				E('button', { class: 'cbi-button', click: ui.hideModal }, _('Cancel')),
+				' ',
+				E('button', { class: 'cbi-button cbi-button-negative', click: L.bind(this.deleteInstance, this, name) }, _('Delete'))
+			])
+		]);
+	},
+
+	deleteInstance: function(name) {
+		ui.hideModal();
+		var n = this.notice(_('Deleting instance "%s"…').format(name), 'info');
+		return callDeleteInstance(name).then(L.bind(function(res) {
+			this.dismiss(n);
+			if (res && res.error) {
+				this.notice(_('Delete failed: %s').format(res.error), 'error');
+				return;
+			}
+			this.notice(_('Instance "%s" deleted.').format(name), 'info', 4000);
+			uci.unload('nordvpn');
+			return uci.load('nordvpn').then(L.bind(function() {
+				if (this.instance === name)
+					this.instance = 'main';
+				return this.refreshStatus().then(L.bind(function() {
+					this.status = this.statusOf(this.instance) || {};
+					this.updateStatusBand();
+					dom.content(this.formNode, this.buildFormSections());
+				}, this));
+			}, this));
+		}, this)).catch(L.bind(function(e) {
+			this.dismiss(n);
+			this.notice(_('Delete failed: %s').format(e), 'error');
+		}, this));
 	},
 
 	/* ---- runtime status band ------------------------------------------ */
@@ -143,8 +303,11 @@ return view.extend({
 		if (s.rotation && s.rotation.enabled)
 			details.push(_('Automatic rotation is on'));
 
+		var legend = _('VPN status');
+		if ((this.instances || []).length > 1)
+			legend += ' — ' + this.instance;
 		dom.content(this.statusNode, E('fieldset', { class: 'cbi-section' }, [
-			E('legend', {}, _('VPN status')),
+			E('legend', {}, legend),
 			E('div', { class: 'cbi-section-node' }, [
 				E('div', { 'aria-live': 'polite' }, [
 					E('div', { class: 'nv-status-main' }, [
@@ -171,8 +334,10 @@ return view.extend({
 	},
 
 	refreshStatus: function() {
-		return callStatus().then(L.bind(function(s) {
-			this.status = s || {};
+		return callInstances().then(L.bind(function(res) {
+			this.instances = (res && res.instances) || [];
+			this.status = this.statusOf(this.instance) || {};
+			this.updateInstancesTable();
 			this.updateStatusBand();
 			if (this.rotNextSpan)
 				dom.content(this.rotNextSpan, this.nextRotationText());
@@ -181,7 +346,7 @@ return view.extend({
 
 	reconnect: function() {
 		var n = this.notice(_('Reconnecting…'), 'info');
-		return callApply().then(L.bind(function(res) {
+		return callApply(this.instance).then(L.bind(function(res) {
 			this.dismiss(n);
 			if (res && res.error)
 				this.notice(_('Reconnect failed: %s').format(res.error), 'error');
@@ -200,7 +365,7 @@ return view.extend({
 
 	rotateNow: function() {
 		var n = this.notice(_('Rotating to another server…'), 'info');
-		return callRotateNow().then(L.bind(function(res) {
+		return callRotateNow(this.instance).then(L.bind(function(res) {
 			this.dismiss(n);
 			if (res && res.ok)
 				this.notice(_('Rotated to %s').format(res.server), 'info', 4000);
@@ -219,7 +384,12 @@ return view.extend({
 
 	buildFormSections: function() {
 		this.refs = {};
-		return [ this.buildConnection(), this.buildRoutingSection(), this.buildRotation(), this.buildAdvanced() ];
+		// Building the form fires the same change paths as user input; the
+		// guard keeps programmatic construction from marking the form dirty.
+		this._building = true;
+		var sections = [ this.buildConnection(), this.buildRoutingSection(), this.buildRotation(), this.buildAdvanced() ];
+		this._building = false;
+		return sections;
 	},
 
 	row: function(labelText, fieldNodes, descText) {
@@ -258,7 +428,7 @@ return view.extend({
 		this.citySel = E('select', { class: 'cbi-input-select', change: L.bind(this.onCityChange, this), disabled: true });
 		this.serverSel = E('select', { class: 'cbi-input-select', change: L.bind(this.onServerChange, this), disabled: true });
 
-		var hop = uci.get('nordvpn', 'main', 'hop_mode') || 'single';
+		var hop = uci.get('nordvpn', this.instance, 'hop_mode') || 'single';
 		this.hopValue = (hop === 'multihop' || hop === 'onion') ? hop : 'single';
 		this.hopButtons = {};
 		var seg = E('div', { class: 'nv-seg' }, [
@@ -293,7 +463,8 @@ return view.extend({
 	// Traffic-routing panel. In a detected manual scheme it is purely
 	// informational; otherwise it drives the backend's stamped auto-routing.
 	buildRoutingSection: function() {
-		var g = function(o, d) { return uci.get('nordvpn', 'main', o) || d; };
+		var self = this;
+		var g = function(o, d) { return uci.get('nordvpn', self.instance, o) || d; };
 		var rt = (this.status || {}).routing || {};
 		var body = E('div', { class: 'cbi-section-node' });
 		this.autoRouting = null;
@@ -362,10 +533,10 @@ return view.extend({
 	},
 
 	buildRotation: function() {
-		var enabled = (uci.get('nordvpn', 'main', 'rotation_enabled') === '1');
-		var mode = uci.get('nordvpn', 'main', 'rotation_mode') || 'interval';
-		var interval = uci.get('nordvpn', 'main', 'rotation_interval') || '360';
-		var time = uci.get('nordvpn', 'main', 'rotation_time') || '04:30';
+		var enabled = (uci.get('nordvpn', this.instance, 'rotation_enabled') === '1');
+		var mode = uci.get('nordvpn', this.instance, 'rotation_mode') || 'interval';
+		var interval = uci.get('nordvpn', this.instance, 'rotation_interval') || '360';
+		var time = uci.get('nordvpn', this.instance, 'rotation_time') || '04:30';
 
 		this.rotEnable = E('input', { type: 'checkbox', change: L.bind(this.onRotationToggle, this) });
 		this.rotEnable.checked = enabled;
@@ -440,7 +611,10 @@ return view.extend({
 	},
 
 	buildAdvanced: function() {
-		var g = function(o, d) { return uci.get('nordvpn', 'main', o) || d; };
+		var self = this;
+		var g = function(o, d) { return uci.get('nordvpn', self.instance, o) || d; };
+		// The server-list cache is shared between instances (owned by 'main').
+		var gm = function(o, d) { return uci.get('nordvpn', 'main', o) || d; };
 		this.cacheRow = E('span', {}, this.cacheSummary());
 
 		var body = E('div', { class: 'cbi-section-node' }, [
@@ -451,8 +625,8 @@ return view.extend({
 			this.row(_('Connection wait (seconds)'), [ this.input('verify_timeout', 'number', g('verify_timeout', '8'), { min: 2, max: 30, style: 'width:80px' }) ],
 				_('How long to wait for a WireGuard handshake before trying the next server')),
 			this.row(_('Max server attempts'), [ this.input('max_retries', 'number', g('max_retries', '10'), { min: 1, max: 50, style: 'width:80px' }) ]),
-			this.row(_('Cache directory'), [ this.input('cache_dir', 'text', g('cache_dir', ''), { placeholder: '/tmp' }) ],
-				_('Where to store the downloaded server list (leave empty for /tmp)')),
+			this.row(_('Cache directory'), [ this.input('cache_dir', 'text', gm('cache_dir', ''), { placeholder: '/tmp' }) ],
+				_('Where to store the downloaded server list, shared by all instances (leave empty for /tmp)')),
 			this.row(_('Server cache'), [
 				E('div', { class: 'nv-inline' }, [
 					this.cacheRow,
@@ -549,7 +723,7 @@ return view.extend({
 		var sel = this.countrySel;
 		if (!sel)
 			return;
-		var chosen = uci.get('nordvpn', 'main', 'country_code') || '';
+		var chosen = uci.get('nordvpn', this.instance, 'country_code') || '';
 		dom.content(sel, E('option', { value: '' }, _('-- Select country --')));
 
 		var countries = this.filteredCountries();
@@ -576,7 +750,7 @@ return view.extend({
 		this.markDirty();
 		var code = this.countrySel.value;
 		var c = this._countryData ? this._countryData[code] : null;
-		var chosenCity = uci.get('nordvpn', 'main', 'city_code') || '';
+		var chosenCity = uci.get('nordvpn', this.instance, 'city_code') || '';
 
 		dom.content(this.citySel, E('option', { value: '' }, _('Automatic city')));
 		dom.content(this.serverSel, E('option', { value: '' }, _('Automatic server')));
@@ -606,15 +780,19 @@ return view.extend({
 			return;
 
 		var cc = this.countrySel.value;
-		var chosenServer = uci.get('nordvpn', 'main', 'fixed_server') || '';
+		var chosenServer = uci.get('nordvpn', this.instance, 'fixed_server') || '';
 		callServers(cc, city.code, this.hopMode()).then(L.bind(function(res) {
 			var relays = (res && res.relays) || [];
 			relays.forEach(function(r) {
 				var label = '%s (%s%%)'.format(r.name || r.hostname, r.load != null ? r.load : '?');
 				this.serverSel.appendChild(E('option', { value: r.hostname, selected: (r.hostname === chosenServer) || null }, label));
 			}, this);
-			if (chosenServer)
+			if (chosenServer) {
+				// Restoring the persisted choice is not a user edit.
+				this._building = true;
 				this.onServerChange();
+				this._building = false;
+			}
 		}, this)).catch(function() {});
 	},
 
@@ -654,6 +832,8 @@ return view.extend({
 	/* ---- dirty / save / discard --------------------------------------- */
 
 	markDirty: function() {
+		if (this._building)
+			return;
 		this.dirty = true;
 		if (this.saveBtn) this.saveBtn.disabled = false;
 		if (this.discardBtn) this.discardBtn.disabled = false;
@@ -669,15 +849,20 @@ return view.extend({
 	},
 
 	collectIntoUci: function() {
-		var setv = function(o, v) {
+		var inst = this.instance;
+		var setv = function(o, v, section) {
+			var sec = section || inst;
 			if (v == null || v === '')
-				uci.unset('nordvpn', 'main', o);
+				uci.unset('nordvpn', sec, o);
 			else
-				uci.set('nordvpn', 'main', o, v);
+				uci.set('nordvpn', sec, o, v);
 		};
-		[ 'interface', 'routing_table', 'cache_dir', 'verify_timeout', 'max_retries' ].forEach(L.bind(function(k) {
+		[ 'interface', 'routing_table', 'verify_timeout', 'max_retries' ].forEach(L.bind(function(k) {
 			if (this.refs[k]) setv(k, (this.refs[k].value || '').trim());
 		}, this));
+		// The cache directory is shared and lives on the 'main' section.
+		if (this.refs.cache_dir)
+			setv('cache_dir', (this.refs.cache_dir.value || '').trim(), 'main');
 
 		setv('hop_mode', this.hopMode());
 		setv('country_code', this.countrySel ? this.countrySel.value : '');
@@ -689,14 +874,14 @@ return view.extend({
 		// Routing toggles exist only when no manual scheme was detected; a
 		// manual setup's options are never written.
 		if (this.autoRouting) {
-			uci.set('nordvpn', 'main', 'auto_routing', this.autoRouting.checked ? '1' : '0');
-			uci.set('nordvpn', 'main', 'killswitch', (this.ksBox && this.ksBox.checked) ? '1' : '0');
-			uci.set('nordvpn', 'main', 'block_ipv6', (this.v6Box && this.v6Box.checked) ? '1' : '0');
-			uci.set('nordvpn', 'main', 'use_vpn_dns', (this.dnsBox && this.dnsBox.checked) ? '1' : '0');
+			uci.set('nordvpn', inst, 'auto_routing', this.autoRouting.checked ? '1' : '0');
+			uci.set('nordvpn', inst, 'killswitch', (this.ksBox && this.ksBox.checked) ? '1' : '0');
+			uci.set('nordvpn', inst, 'block_ipv6', (this.v6Box && this.v6Box.checked) ? '1' : '0');
+			uci.set('nordvpn', inst, 'use_vpn_dns', (this.dnsBox && this.dnsBox.checked) ? '1' : '0');
 		}
 
 		var rotOn = this.rotEnable && this.rotEnable.checked && !fixed;
-		uci.set('nordvpn', 'main', 'rotation_enabled', rotOn ? '1' : '0');
+		uci.set('nordvpn', inst, 'rotation_enabled', rotOn ? '1' : '0');
 		if (rotOn) {
 			var timeMode = this.rotModeTime && this.rotModeTime.checked;
 			setv('rotation_mode', timeMode ? 'time' : 'interval');
@@ -722,7 +907,7 @@ return view.extend({
 				this.clearChangeIndicator();
 				this.dismiss(p);
 				p = this.notice(_('Applying and reconnecting…'), 'info');
-				return callApply();
+				return callApply(this.instance);
 			}, this))
 			.then(L.bind(function(res) {
 				this.dismiss(p);
@@ -774,7 +959,7 @@ return view.extend({
 		var btn = ev.target;
 		btn.disabled = true;
 		dom.content(err, _('Verifying…'));
-		return callSetCredentials(token).then(L.bind(function(res) {
+		return callSetCredentials(token, this.instance).then(L.bind(function(res) {
 			if (res && res.error) {
 				btn.disabled = false;
 				dom.content(err, res.error);

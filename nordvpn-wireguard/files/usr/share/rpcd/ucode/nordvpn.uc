@@ -15,7 +15,10 @@ const validate_token = _common.validate_token,
       cache_file_path = _common.cache_file_path;
 const status = require('nordvpn.status').status;
 const _apply = require('nordvpn.apply');
-const apply = _apply.apply, set_credentials = _apply.set_credentials;
+const apply = _apply.apply,
+      set_credentials = _apply.set_credentials,
+      create_instance = _apply.create_instance,
+      delete_instance = _apply.delete_instance;
 const _rotate = require('nordvpn.rotate');
 const rotate = _rotate.rotate,
       read_state = _rotate.read_state,
@@ -145,6 +148,25 @@ methods.refresh_locations = {
 		// Detached one-shot worker; fixed command, no user input, no shell injection.
 		system('/usr/bin/nordvpn-cache-update >/dev/null 2>&1 &');
 		return { job: '' + time(), started: true };
+	}
+};
+
+methods.create_instance = {
+	args: { instance: '' },
+	call: function(request) {
+		let a = request.args || {};
+		return create_instance(cursor(), a.instance);
+	}
+};
+
+methods.delete_instance = {
+	args: { instance: '' },
+	call: function(request) {
+		let uci = cursor();
+		let name = req_instance(uci, request);
+		if (!name)
+			return { error: 'no such instance' };
+		return delete_instance(uci, name);
 	}
 };
 

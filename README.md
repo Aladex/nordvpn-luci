@@ -192,10 +192,18 @@ route through Germany and a media network through Serbia. Issue a separate
 NordVPN access token per instance: reusing one key from several places has
 reportedly led to NordVPN locking it. `status`, `apply`, `rotate_now` and
 `set_credentials` accept an `instance` argument (default `main`);
+`create_instance`/`delete_instance` manage the lifecycle, and
 `nordvpn-rotate <name>` rotates one instance from the CLI. The server-list
-cache is shared. The LuCI page currently manages the 'main' instance;
-secondary instances are configured over UCI/ubus, with their traffic steered
-by your own policy-routing rules (their `routing_table`).
+cache is shared.
+
+The LuCI page lists every instance with its state, server and next rotation;
+clicking a row selects it and the whole form (credentials, country, rotation,
+routing) applies to the selected instance. **Add instance** creates one (it
+gets interface `nv_<name>`), **Delete** tears the tunnel down and removes its
+interface, stamped firewall objects and settings. Steer a secondary
+instance's traffic with your own policy-routing rules (its `routing_table`).
+
+![VPN instances](docs/screenshots/instances.png)
 
 Access is gated by the `luci-app-nordvpn` ACL: read methods for read sessions,
 write methods for write sessions. A read-only LuCI account cannot call the write

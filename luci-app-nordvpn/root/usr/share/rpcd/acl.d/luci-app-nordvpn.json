@@ -9,7 +9,7 @@
 		},
 		"write": {
 			"ubus": {
-				"nordvpn": [ "set_credentials", "apply", "refresh_locations", "rotate_now" ]
+				"nordvpn": [ "set_credentials", "apply", "refresh_locations", "rotate_now", "create_instance", "delete_instance" ]
 			},
 			"uci": [ "nordvpn" ]
 		}

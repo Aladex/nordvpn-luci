@@ -258,4 +258,71 @@ function apply(uci, instance) {
 		error: 'could not reach any server for the current selection; restored the previous connection' };
 }
 
-return { set_credentials, current_peer, restore_peer, write_relay, bring_up, verify_handshake, connect_one, apply };
+// Create a new VPN instance section with its own interface. Committed
+// atomically here (not via the UI's staged-apply machinery, whose rollback
+// window makes programmatic section creation fragile).
+function create_instance(uci, name) {
+	let valid = _common.validate_instance(name);
+	if (!valid || valid != name)
+		return { error: 'invalid instance name' };
+	if (name == 'globals')
+		return { error: 'this name is reserved' };
+	if (uci.get('nordvpn', name) != null)
+		return { error: 'an instance with this name already exists' };
+
+	let iface = validate_interface('nv_' + name);
+	if (!iface)
+		return { error: 'instance name is too long for an interface name' };
+	let taken = false;
+	for (let other in _common.list_instances(uci))
+		if (load_settings(uci, other).interface == iface)
+			taken = true;
+	if (taken || uci.get('network', iface) != null)
+		return { error: 'interface ' + iface + ' already exists' };
+
+	uci.set('nordvpn', name, 'instance');
+	uci.set('nordvpn', name, 'interface', iface);
+	uci.set('nordvpn', name, 'enabled', '1');
+	uci.commit('nordvpn');
+	return { ok: true, instance: name, interface: iface };
+}
+
+// Tear down and remove a secondary VPN instance: stamped routing/firewall
+// objects, the netifd interface + peer, and the config section itself.
+// 'main' cannot be deleted (it carries the shared cache options).
+function delete_instance(uci, name) {
+	if (name == 'main')
+		return { error: 'the main instance cannot be deleted' };
+	if (uci.get('nordvpn', name) == null)
+		return { error: 'no such instance' };
+
+	let s = load_settings(uci, name);
+	let iface = validate_interface(s.interface);
+	if (!iface)
+		return { error: 'invalid interface name' };
+
+	// Remove stamped artifacts by enforcing the all-off state.
+	s.auto_routing = false;
+	s.killswitch = false;
+	s.block_ipv6 = false;
+	s.use_vpn_dns = false;
+	let routing = enforce_routing(uci, s);
+	if (routing.changed_firewall) {
+		uci.commit('firewall');
+		run([ '/etc/init.d/firewall', 'reload' ]);
+	}
+
+	run([ 'ifdown', iface ]);
+	let peer = find_peer(uci, iface);
+	if (peer)
+		uci.delete('network', peer);
+	if (uci.get('network', iface) != null && uci.get('network', iface, 'vpn_type') == 'nordvpn')
+		uci.delete('network', iface);
+	uci.commit('network');
+
+	uci.delete('nordvpn', name);
+	uci.commit('nordvpn');
+	return { ok: true, deleted: name, interface: iface };
+}
+
+return { set_credentials, current_peer, restore_peer, write_relay, bring_up, verify_handshake, connect_one, apply, create_instance, delete_instance };

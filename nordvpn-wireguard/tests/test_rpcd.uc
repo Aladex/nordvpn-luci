@@ -59,5 +59,14 @@ global.MOCK_UCI = { nordvpn: { main: { '.type': 'settings', interface: 'nordvpn'
 	network: { nordvpn: { '.type': 'interface', private_key: KEY } } };
 ok('rotate_now skipped with fixed server', m.rotate_now.call().skipped == true);
 
+// instance lifecycle: create -> listed -> delete; main is protected
+ok('create_instance ok', m.create_instance.call({ args: { instance: 'extra' } }).ok == true);
+ok('create rejects duplicate', m.create_instance.call({ args: { instance: 'extra' } }).error != null);
+ok('create rejects bad name', m.create_instance.call({ args: { instance: 'no way' } }).error != null);
+eq('instances lists both', length(m.instances.call().instances), 2);
+ok('delete_instance ok', m.delete_instance.call({ args: { instance: 'extra' } }).ok == true);
+eq('instances back to one', length(m.instances.call().instances), 1);
+ok('delete main rejected', m.delete_instance.call({ args: { instance: 'main' } }).error != null);
+
 printf('\n%s\n', fails ? ('FAILURES: ' + fails) : 'ALL RPCD TESTS PASSED');
 exit(fails ? 1 : 0);

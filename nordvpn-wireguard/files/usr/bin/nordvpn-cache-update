@@ -1,0 +1,24 @@
+#!/usr/bin/ucode -S
+// SPDX-License-Identifier: 0BSD
+// One-shot NordVPN server-list cache updater. Invoked by the nordvpn procd
+// service and safe to run manually. Any CLI arguments are ignored.
+
+'use strict';
+
+import { cursor } from 'uci';
+import { load_settings, cache_file_path, log } from 'nordvpn.common';
+import { fetch_and_build } from 'nordvpn.cache';
+
+let uci = cursor();
+let settings = load_settings(uci);
+let path = cache_file_path(settings);
+
+let res = fetch_and_build(path);
+if (!res || res.error) {
+	log('cache update failed: ' + (res ? res.error : 'unknown error'));
+	exit(1);
+}
+
+printf('nordvpn-cache-update: cached %d servers in %d cities across %d countries -> %s\n',
+	res.stats.gateways, res.stats.cities, res.stats.countries, path);
+exit(0);

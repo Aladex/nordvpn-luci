@@ -1,0 +1,44 @@
+#!/usr/bin/ucode -S
+// SPDX-License-Identifier: 0BSD
+// Foreground scheduler daemon supervised by procd. Refreshes the server-list
+// cache and triggers rotation on schedule, running each job in a short-lived
+// child (uloop.task) so a slow job never stalls the loop. Overlap is prevented
+// by the workers' own lock files. Timing decisions live in nordvpn.service.
+
+'use strict';
+
+import * as uloop from 'uloop';
+import { cursor } from 'uci';
+import { load_settings, cache_file_path, log } from 'nordvpn.common';
+import { fetch_and_build, cache_is_stale } from 'nordvpn.cache';
+import { rotate } from 'nordvpn.rotate';
+import { should_refresh, should_rotate } from 'nordvpn.service';
+
+uloop.init();
+
+let last_cache = 0;
+let last_rotate = 0;
+
+function tick() {
+	// Fresh cursor each tick so committed config changes are picked up.
+	let s = load_settings(cursor());
+	let now = time();
+	let path = cache_file_path(s);
+
+	if (should_refresh(s, last_cache, now, cache_is_stale(path))) {
+		last_cache = now;
+		uloop.task(function() { fetch_and_build(path); });
+	}
+
+	let lt = localtime();
+	let hm = sprintf('%02d:%02d', lt.hour, lt.min);
+	if (should_rotate(s, last_rotate, now, hm)) {
+		last_rotate = now;
+		uloop.task(function() { rotate(); });
+	}
+}
+
+// Re-check every 30s; run once immediately at startup.
+uloop.interval(30000, tick);
+tick();
+uloop.run();

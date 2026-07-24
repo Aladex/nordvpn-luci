@@ -1,0 +1,29 @@
+config settings 'main'
+	# Master switch. A fresh install ships disabled so no tunnel starts and
+	# no routing changes happen before the user configures credentials.
+	option enabled '0'
+	# Managed WireGuard interface (UCI section name in /etc/config/network).
+	option interface 'nordvpn'
+	# Optional custom routing table (ip4table/ip6table). Empty = main table.
+	option routing_table ''
+	# 'single' or 'multihop'.
+	option hop_mode 'single'
+	# Two-letter country code and 'cc-cityslug' city code for server selection.
+	option country_code ''
+	option city_code ''
+	# When set, pin this specific gateway hostname and disable rotation.
+	option fixed_server ''
+	# Automatic rotation.
+	option rotation_enabled '0'
+	option rotation_mode 'interval'
+	option rotation_interval '360'
+	option rotation_time '04:30'
+	# Connectivity test tuning for rotation.
+	option ping_count '10'
+	option ping_timeout '2'
+	option max_retries '10'
+	# Server-list cache directory (empty = /tmp) and background refresh period.
+	option cache_dir ''
+	option cache_refresh_interval '21600'
+	# Stamped by the migration/uci-defaults script; gates one-shot migrations.
+	# option config_version '1'

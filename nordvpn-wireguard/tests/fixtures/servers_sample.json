@@ -1,0 +1,117 @@
+[
+  {
+    "hostname": "ee70.nordvpn.com",
+    "station": "192.0.2.10",
+    "name": "Estonia #70",
+    "load": 12,
+    "locations": [
+      {
+        "latitude": 59.44,
+        "longitude": 24.75,
+        "country": {
+          "name": "Estonia",
+          "code": "EE",
+          "city": {
+            "name": "Tallinn"
+          }
+        }
+      }
+    ],
+    "technologies": [
+      {
+        "identifier": "wireguard_udp",
+        "metadata": [
+          {
+            "name": "public_key",
+            "value": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDE="
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "hostname": "us9999.nordvpn.com",
+    "station": "192.0.2.20",
+    "name": "United States #9999",
+    "load": 47,
+    "locations": [
+      {
+        "latitude": 40.71,
+        "longitude": -74.0,
+        "country": {
+          "name": "United States",
+          "code": "US",
+          "city": {
+            "name": "New York"
+          }
+        }
+      }
+    ],
+    "technologies": [
+      {
+        "identifier": "wireguard_udp",
+        "metadata": [
+          {
+            "name": "public_key",
+            "value": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDI="
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "hostname": "de-nl12.nordvpn.com",
+    "station": "192.0.2.30",
+    "name": "Germany - Netherlands #12",
+    "load": 30,
+    "locations": [
+      {
+        "latitude": 52.37,
+        "longitude": 4.89,
+        "country": {
+          "name": "Netherlands",
+          "code": "NL",
+          "city": {
+            "name": "Amsterdam"
+          }
+        }
+      }
+    ],
+    "technologies": [
+      {
+        "identifier": "wireguard_udp",
+        "metadata": [
+          {
+            "name": "public_key",
+            "value": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDM="
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "hostname": "xx1.nordvpn.com",
+    "station": "192.0.2.40",
+    "name": "NoWireGuard #1",
+    "load": 5,
+    "locations": [
+      {
+        "latitude": 0,
+        "longitude": 0,
+        "country": {
+          "name": "Nowhere",
+          "code": "XX",
+          "city": {
+            "name": "Void"
+          }
+        }
+      }
+    ],
+    "technologies": [
+      {
+        "identifier": "openvpn_udp",
+        "metadata": []
+      }
+    ]
+  }
+]

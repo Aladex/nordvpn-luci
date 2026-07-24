@@ -1,0 +1,93 @@
+#!/bin/sh
+# SPDX-License-Identifier: 0BSD
+# One-time, idempotent migration from the legacy Lua luci-app-nordvpn into the
+# dedicated /etc/config/nordvpn owned by nordvpn-wireguard. Safe to run more
+# than once; it never disconnects a working tunnel.
+
+. /lib/functions.sh
+
+pkg=nordvpn
+
+# Ensure the config file and the 'main' section exist (a kept legacy config may
+# only contain the old 'settings' cache section).
+[ -f "/etc/config/$pkg" ] || touch "/etc/config/$pkg"
+[ -n "$(uci -q get "$pkg.main")" ] || uci set "$pkg.main=settings"
+
+# Gate the legacy import on the schema stamp so it runs only once.
+if [ -z "$(uci -q get "$pkg.main.config_version")" ]; then
+
+	# Locate the legacy managed interface (network.<name>.vpn_type=nordvpn).
+	legacy_if=''
+	_find_legacy() {
+		local vt
+		config_get vt "$1" vpn_type
+		[ "$vt" = 'nordvpn' ] && [ -z "$legacy_if" ] && legacy_if="$1"
+	}
+	config_load network
+	config_foreach _find_legacy interface
+
+	_copy() { # _copy <network-option> <nordvpn-option>
+		local v
+		v="$(uci -q get "network.$legacy_if.$1")"
+		[ -n "$v" ] && uci set "$pkg.main.$2=$v"
+	}
+
+	if [ -n "$legacy_if" ]; then
+		uci set "$pkg.main.interface=$legacy_if"
+		_copy nordvpn_hop_mode          hop_mode
+		_copy nordvpn_country_code      country_code
+		_copy nordvpn_city_code         city_code
+		_copy nordvpn_rotation_enabled  rotation_enabled
+		_copy nordvpn_rotation_mode     rotation_mode
+		_copy nordvpn_rotation_interval rotation_interval
+		_copy nordvpn_rotation_time     rotation_time
+		_copy nordvpn_ping_count        ping_count
+		_copy nordvpn_ping_timeout      ping_timeout
+		_copy nordvpn_max_retries       max_retries
+
+		# Preserve a pinned server (fixed_server holds the gateway hostname).
+		if [ "$(uci -q get "network.$legacy_if.nordvpn_fixed_server")" = '1' ]; then
+			hostname="$(uci -q get "network.$legacy_if.nordvpn_server_hostname")"
+			[ -n "$hostname" ] && uci set "$pkg.main.fixed_server=$hostname"
+		fi
+
+		# Preserve a user cache directory only if it is an absolute path.
+		cdir="$(uci -q get "network.$legacy_if.nordvpn_cache_dir")"
+		case "$cdir" in
+			/*) uci set "$pkg.main.cache_dir=$cdir" ;;
+		esac
+
+		# A stored private key means a tunnel already works; keep it enabled so
+		# the upgrade does not tear down a working connection.
+		[ -n "$(uci -q get "network.$legacy_if.private_key")" ] && \
+			uci set "$pkg.main.enabled=1"
+
+		# The token is never persisted going forward — delete it immediately.
+		if [ -n "$(uci -q get "network.$legacy_if.nordvpn_token")" ]; then
+			uci -q delete "network.$legacy_if.nordvpn_token"
+			uci -q commit network
+		fi
+	fi
+
+	# Legacy cache settings lived in the old nordvpn.settings section.
+	ocdir="$(uci -q get "$pkg.settings.cache_dir")"
+	case "$ocdir" in
+		/*) [ -z "$(uci -q get "$pkg.main.cache_dir")" ] && uci set "$pkg.main.cache_dir=$ocdir" ;;
+	esac
+	ocri="$(uci -q get "$pkg.settings.cache_refresh_interval")"
+	[ -n "$ocri" ] && uci set "$pkg.main.cache_refresh_interval=$ocri"
+
+	# Remove cron entries installed by very old cron-based versions.
+	if command -v crontab >/dev/null 2>&1; then
+		crontab -l 2>/dev/null \
+			| grep -v '/usr/bin/nordvpn-rotate' \
+			| grep -v '/usr/bin/nordvpn-cache-update' \
+			| crontab - 2>/dev/null
+	fi
+
+	uci set "$pkg.main.config_version=1"
+fi
+
+[ -n "$(uci -q changes "$pkg")" ] && uci commit "$pkg"
+
+exit 0

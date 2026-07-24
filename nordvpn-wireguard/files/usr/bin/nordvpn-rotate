@@ -1,0 +1,23 @@
+#!/usr/bin/ucode -S
+// SPDX-License-Identifier: 0BSD
+// One-shot NordVPN rotation worker. Invoked by the nordvpn procd service and
+// safe to run manually. Reads the schedule/selection from /etc/config/nordvpn.
+
+'use strict';
+
+import { rotate } from 'nordvpn.rotate';
+import { log } from 'nordvpn.common';
+
+let res = rotate();
+
+if (res.ok) {
+	printf('nordvpn-rotate: connected to %s\n', res.server);
+	exit(0);
+}
+if (res.skipped) {
+	printf('nordvpn-rotate: skipped (%s)\n', res.reason);
+	exit(0);
+}
+
+log('rotation failed: ' + (res.error || 'unknown error'));
+exit(1);

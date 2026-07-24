@@ -8,6 +8,8 @@ routing tables and a native LuCI page.
 > by Nord Security. "NordVPN" and "NordLynx" are trademarks of their respective
 > owners. Use your own NordVPN account and access token.
 
+![LuCI overview page](docs/screenshots/overview.png)
+
 ## Architecture
 
 The project ships as **two packages** so the VPN service is useful without a web
@@ -16,8 +18,8 @@ interface and the LuCI app stays a thin frontend:
 - **`nordvpn-wireguard`** — the backend (targets `openwrt/packages`,
   `net/nordvpn-wireguard`). ucode + procd + an rpcd/ubus object. Does credential
   exchange, server-list caching, WireGuard interface/peer generation,
-  connectivity checks, scheduled rotation and runtime status. Works from the CLI
-  and over ubus with no LuCI installed.
+  handshake verification, scheduled rotation and runtime status. Works from the
+  CLI and over ubus with no LuCI installed.
 - **`luci-app-nordvpn`** — the LuCI frontend (targets `openwrt/luci`,
   `applications/luci-app-nordvpn`). A JavaScript view that calls the backend's
   ubus methods. Performs no privileged filesystem or network-config operations
@@ -46,6 +48,8 @@ luci-app-nordvpn/                          # LuCI frontend (luci feed)
 ├── htdocs/luci-static/resources/view/nordvpn/overview.js
 ├── po/templates/nordvpn.pot
 └── root/usr/share/{luci/menu.d,rpcd/acl.d}/luci-app-nordvpn.json
+
+docs/screenshots/                          # LuCI page screenshots (README)
 ```
 
 ## Supported releases
@@ -88,9 +92,18 @@ Installing `nordvpn-wireguard` alone gives a working CLI/service; add
 1. Open LuCI → **VPN → NordVPN**.
 2. Click **Set credentials** and paste your 64-character NordVPN access token.
    It is exchanged once for the WireGuard private key and is **never stored**.
-3. Pick **Country** (required), optionally **City** and **Server**. Leave City
-   and Server on *Automatic* to rotate within the country.
-4. Optionally enable **Automatic rotation** and a schedule.
+
+   ![Credentials dialog](docs/screenshots/credentials-modal.png)
+
+3. Pick **Country** (required), optionally **City** and **Server**. Country
+   names carry emoji flags (plain names on systems without flag glyphs). Leave
+   City and Server on *Automatic* to rotate within the country.
+4. Optionally enable **Automatic rotation** and a schedule. When rotation is
+   active the page shows the concrete **Next rotation** time (router-scheduled,
+   shown in your browser's local time zone).
+
+   ![Automatic rotation](docs/screenshots/rotation.png)
+
 5. Click **Save and reconnect**.
 
 Get a token at
@@ -117,12 +130,15 @@ config settings 'main'
 	option rotation_mode 'interval'  # or 'time'
 	option rotation_interval '360'   # minutes
 	option rotation_time '04:30'     # HH:MM, router local time
-	option ping_count '10'
-	option ping_timeout '2'
-	option max_retries '10'
+	option verify_timeout '8'        # seconds to wait for a WG handshake
+	option max_retries '10'          # candidate servers per rotation
 	option cache_dir ''              # empty = /tmp
-	option cache_refresh_interval '21600'
+	option cache_refresh_interval '21600'   # seconds, background refresh
 ```
+
+All of these are editable from the LuCI page (most under **Advanced settings**):
+
+![Advanced settings](docs/screenshots/advanced.png)
 
 The generated WireGuard interface/peer live in `/etc/config/network` and are
 backend-owned. The private key is stored there for netifd but never appears in
@@ -135,13 +151,19 @@ never returned.
 
 ```bash
 ubus call nordvpn status            # runtime state, location, handshake age
-ubus call nordvpn locations         # cached country/city/server list
+ubus call nordvpn locations         # cached country/city tree (+ per-city counts)
+ubus call nordvpn servers '{"country":"de","city":"de-berlin","hop_mode":"single"}'
 ubus call nordvpn refresh_status    # cache-refresh job progress
 ubus call nordvpn set_credentials '{"token":"<64-hex-token>"}'
 ubus call nordvpn apply             # rebuild the peer and bring the tunnel up
 ubus call nordvpn rotate_now        # one-shot rotation
 ubus call nordvpn refresh_locations # start an async server-list refresh
 ```
+
+`status` distinguishes *configured* from *connected*: `connected` requires a
+WireGuard handshake fresher than 3 minutes, `degraded` means the interface is
+up but the handshake went stale, and `rotation.next_run` is the epoch of the
+next scheduled rotation (`null` when rotation cannot run).
 
 Access is gated by the `luci-app-nordvpn` ACL: read methods for read sessions,
 write methods for write sessions. A read-only LuCI account cannot call the write
@@ -156,11 +178,30 @@ logread -e nordvpn
 ```
 
 One procd-supervised daemon (`nordvpn-service`) refreshes the cache and runs
-scheduled rotation, re-reading `/etc/config/nordvpn` on every tick; a config
-reload restarts it. Scheduled rotation runs `nordvpn-rotate`, which picks a
-server within your selection, updates the peer, then pings through the tunnel
-(bound to the VPN device) and retries another server if the link is dead — up to
-`max_retries`. A failed rotation restores the last working peer.
+scheduled rotation, re-reading `/etc/config/nordvpn` on every 30-second tick; a
+config change restarts it. The rotation clock is persisted in
+`/tmp/nordvpn_rotate_state.json`, so daemon restarts do not reset the schedule
+or trigger a spurious rotation.
+
+### Server verification (apply and rotation)
+
+NordVPN's server list includes dead endpoints, and all WireGuard servers in a
+country share one public key — so a bad endpoint still brings the interface
+"up" without error. Both **apply** and **rotation** therefore verify each
+candidate by waiting up to `verify_timeout` seconds for an actual **WireGuard
+handshake** (`wg show latest-handshakes`), not by pinging through the tunnel.
+Rotation tries up to `max_retries` shuffled candidates (excluding the current
+gateway) and restores the last working peer if none handshake; apply behaves
+the same way for automatic selections.
+
+### Server-list cache
+
+The daemon refreshes the cache automatically: on its first tick after start it
+refreshes if the on-disk cache is older than 24 h, and afterwards every
+`cache_refresh_interval` seconds (6 h by default). The **Refresh server list**
+button in the UI starts the same one-shot worker (`nordvpn-cache-update`)
+asynchronously. Cache writes are atomic (temp file + rename), refreshes are
+serialized with a lock, and a failed refresh keeps the previous good cache.
 
 ## Custom routing tables
 
@@ -173,8 +214,10 @@ Set **Routing table** (Advanced) to route VPN traffic through a separate table
 - The access token is exchanged for the private key through an anonymous pipe
   (curl reads it from a config on `/proc/self/fd`); it never appears in argv, an
   environment variable, a temp file, or logs, and is never persisted.
-- Every external command runs as an argv array (no shell), so interface names,
-  hostnames, schedules and cache paths cannot inject shell syntax.
+- Every external command is built from an argv list with each argument
+  single-quoted for the shell, and every interpolated value (interface names,
+  hostnames, schedules, cache paths) is whitelist-validated first, so no shell
+  syntax can be injected.
 - All ubus inputs have a fixed schema and are range/format validated.
 - Cache writes are atomic (temp file + rename) and refreshes are serialized by a
   lock; a failed refresh keeps the last good cache.

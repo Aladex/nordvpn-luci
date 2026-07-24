@@ -169,6 +169,9 @@ never returned.
 ```bash
 ubus call nordvpn status            # runtime state, location, handshake age
 ubus call nordvpn instances         # status of every configured VPN instance
+ubus call nordvpn external_ip       # public IP as seen through the tunnel
+ubus call nordvpn disconnect        # take the tunnel down, pause rotation
+ubus call nordvpn clear_credentials # forget the stored WireGuard key
 ubus call nordvpn locations         # cached country/city tree (+ per-city counts)
 ubus call nordvpn servers '{"country":"de","city":"de-berlin","hop_mode":"single"}'
 ubus call nordvpn refresh_status    # cache-refresh job progress
@@ -200,8 +203,19 @@ The LuCI page lists every instance with its state, server and next rotation;
 clicking a row selects it and the whole form (credentials, country, rotation,
 routing) applies to the selected instance. **Add instance** creates one (it
 gets interface `nv_<name>`), **Delete** tears the tunnel down and removes its
-interface, stamped firewall objects and settings. Steer a secondary
-instance's traffic with your own policy-routing rules (its `routing_table`).
+interface, stamped firewall objects and settings; for 'main' the button is
+**Reset** — the section stays but every option returns to its default. The
+status band shows the connected server's actual city and the public IP seen
+through the tunnel, and offers **Disconnect** (tunnel down, rotation paused
+until the next connect). Credentials can be removed without deleting the
+instance.
+
+To steer only some networks through an instance, pick them under **Steered
+networks** in its Traffic routing panel: the backend maintains stamped policy
+rules (`in <network> lookup <table>`, priority 20000) plus prohibit rules that
+act as a per-network kill switch (optional) and IPv6 leak block (default on) —
+they fire only when the tunnel's table cannot serve the traffic. Or keep using
+your own policy-routing rules (manual mode is detected and left alone).
 
 ![VPN instances](docs/screenshots/instances.png)
 

@@ -59,7 +59,11 @@ function status(uci, instance) {
 		interface: iface,
 		location: {
 			country: uci.get('network', iface, 'nordvpn_country_code'),
-			city: uci.get('network', iface, 'nordvpn_city_code')
+			// Prefer the connected server's actual location (stored on every
+			// apply/rotate) over the configured selection, which is empty when
+			// the city is on Automatic.
+			city: uci.get('network', iface, 'nordvpn_location') ||
+				uci.get('network', iface, 'nordvpn_city_code')
 		},
 		gateway: peer ? uci.get('network', peer, 'nordvpn_gateway') : null,
 		endpoint: endpoint_host ? (endpoint_host + ':' + (endpoint_port || '')) : null,

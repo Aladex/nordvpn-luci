@@ -19,6 +19,9 @@ var callSetCredentials = rpc.declare({ object: 'nordvpn', method: 'set_credentia
 var callApply = rpc.declare({ object: 'nordvpn', method: 'apply', params: [ 'instance' ] });
 var callRefreshLocations = rpc.declare({ object: 'nordvpn', method: 'refresh_locations' });
 var callRotateNow = rpc.declare({ object: 'nordvpn', method: 'rotate_now', params: [ 'instance' ] });
+var callExternalIp = rpc.declare({ object: 'nordvpn', method: 'external_ip', params: [ 'instance' ] });
+var callDisconnect = rpc.declare({ object: 'nordvpn', method: 'disconnect', params: [ 'instance' ] });
+var callClearCredentials = rpc.declare({ object: 'nordvpn', method: 'clear_credentials', params: [ 'instance' ] });
 var callCreateInstance = rpc.declare({ object: 'nordvpn', method: 'create_instance', params: [ 'instance' ] });
 var callDeleteInstance = rpc.declare({ object: 'nordvpn', method: 'delete_instance', params: [ 'instance' ] });
 
@@ -126,10 +129,10 @@ return view.extend({
 				E('td', { class: 'td', style: 'color:' + info.color }, info.label),
 				E('td', { class: 'td' }, (flag ? flag + ' ' : '') + (st.gateway || '—')),
 				E('td', { class: 'td' }, next),
-				E('td', { class: 'td' }, st.instance === 'main' ? '' : E('button', {
+				E('td', { class: 'td' }, E('button', {
 					class: 'cbi-button cbi-button-remove',
 					click: L.bind(this.showDeleteInstanceModal, this, st.instance)
-				}, _('Delete')))
+				}, st.instance === 'main' ? _('Reset') : _('Delete')))
 			]));
 		}, this));
 
@@ -202,12 +205,16 @@ return view.extend({
 	showDeleteInstanceModal: function(name, ev) {
 		if (ev)
 			ev.stopPropagation();
-		ui.showModal(_('Delete instance "%s"?').format(name), [
-			E('p', {}, _('The tunnel is taken down and its interface, firewall objects and settings are removed. LAN traffic routed through it will fall back to your other routes.')),
+		var main = (name === 'main');
+		ui.showModal(main ? _('Reset "main" to defaults?') : _('Delete instance "%s"?').format(name), [
+			E('p', {}, main
+				? _('The tunnel is taken down, the stored key, interface and firewall objects are removed, and every setting of this instance returns to its default. Other instances are not affected.')
+				: _('The tunnel is taken down and its interface, firewall objects and settings are removed. LAN traffic routed through it will fall back to your other routes.')),
 			E('div', { class: 'right' }, [
 				E('button', { class: 'cbi-button', click: ui.hideModal }, _('Cancel')),
 				' ',
-				E('button', { class: 'cbi-button cbi-button-negative', click: L.bind(this.deleteInstance, this, name) }, _('Delete'))
+				E('button', { class: 'cbi-button cbi-button-negative', click: L.bind(this.deleteInstance, this, name) },
+					main ? _('Reset') : _('Delete'))
 			])
 		]);
 	},
@@ -221,7 +228,9 @@ return view.extend({
 				this.notice(_('Delete failed: %s').format(res.error), 'error');
 				return;
 			}
-			this.notice(_('Instance "%s" deleted.').format(name), 'info', 4000);
+			this.notice(res && res.reset
+				? _('Instance "main" reset to defaults.')
+				: _('Instance "%s" deleted.').format(name), 'info', 4000);
 			uci.unload('nordvpn');
 			return uci.load('nordvpn').then(L.bind(function() {
 				if (this.instance === name)
@@ -300,6 +309,13 @@ return view.extend({
 			details.push(_('🧅 Onion over VPN'));
 		if (s.state !== 'connected' && s.routing && s.routing.killswitch)
 			details.push(_('Kill switch is blocking LAN traffic'));
+		if (s.state === 'connected') {
+			var ipKey = this.instance + '|' + (s.gateway || '');
+			if (this.extIp && this.extIp.key === ipKey)
+				details.push(_('Public IP: %s').format(this.extIp.ip));
+			else
+				this.maybeFetchExternalIp(ipKey);
+		}
 		if (s.rotation && s.rotation.enabled)
 			details.push(_('Automatic rotation is on'));
 
@@ -326,11 +342,35 @@ return view.extend({
 							class: 'cbi-button',
 							disabled: (!s.configured || (s.rotation && s.rotation.enabled !== true)) || null,
 							click: L.bind(this.rotateNow, this)
-						}, _('Rotate now'))
+						}, _('Rotate now')),
+						E('button', {
+							class: 'cbi-button cbi-button-remove',
+							disabled: (!s.configured || s.state === 'disconnected' || s.state === 'not_configured') || null,
+							click: L.bind(this.disconnect, this)
+						}, _('Disconnect'))
 					])
 				])
 			])
 		]));
+	},
+
+	// Fetch the tunnel's public IP once per instance+gateway combination (the
+	// status poll runs every 5 s; external services would rate-limit that).
+	maybeFetchExternalIp: function(key) {
+		if (this._extIpPending === key)
+			return;
+		this._extIpPending = key;
+		callExternalIp(this.instance).then(L.bind(function(res) {
+			if (this._extIpPending !== key)
+				return;
+			this._extIpPending = null;
+			if (res && res.ip) {
+				this.extIp = { key: key, ip: res.ip };
+				this.updateStatusBand();
+			}
+		}, this)).catch(L.bind(function() {
+			this._extIpPending = null;
+		}, this));
 	},
 
 	refreshStatus: function() {
@@ -360,6 +400,21 @@ return view.extend({
 		}, this)).catch(L.bind(function(e) {
 			this.dismiss(n);
 			this.notice(_('Reconnect failed: %s').format(e), 'error');
+		}, this));
+	},
+
+	disconnect: function() {
+		var n = this.notice(_('Disconnecting…'), 'info');
+		return callDisconnect(this.instance).then(L.bind(function(res) {
+			this.dismiss(n);
+			if (res && res.error)
+				this.notice(_('Disconnect failed: %s').format(res.error), 'error');
+			else
+				this.notice(_('Disconnected. Automatic rotation is paused until the next connect.'), 'info', 5000);
+			return this.refreshStatus();
+		}, this)).catch(L.bind(function(e) {
+			this.dismiss(n);
+			this.notice(_('Disconnect failed: %s').format(e), 'error');
 		}, this));
 	},
 
@@ -423,6 +478,10 @@ return view.extend({
 			class: 'cbi-button',
 			click: L.bind(this.showCredentialModal, this)
 		}, configured ? _('Replace credentials') : _('Set credentials'));
+		var credClearBtn = configured ? E('button', {
+			class: 'cbi-button cbi-button-remove',
+			click: L.bind(this.showClearCredentialsModal, this)
+		}, _('Remove')) : '';
 
 		this.countrySel = E('select', { class: 'cbi-input-select', change: L.bind(this.onCountryChange, this) });
 		this.citySel = E('select', { class: 'cbi-input-select', change: L.bind(this.onCityChange, this), disabled: true });
@@ -448,7 +507,7 @@ return view.extend({
 		var section = E('fieldset', { class: 'cbi-section' }, [
 			E('legend', {}, _('Connection')),
 			E('div', { class: 'cbi-section-node' }, [
-				this.row(_('Credentials'), [ E('div', { class: 'nv-inline' }, [ credState, credBtn ]) ]),
+				this.row(_('Credentials'), [ E('div', { class: 'nv-inline' }, [ credState, credBtn, credClearBtn ]) ]),
 				this.row(_('Hop mode'), [ seg, this.hopNote ]),
 				this.row(_('Country'), [ this.countrySel, this.locNote ]),
 				this.row(_('City'), [ this.citySel ], _('Leave on Automatic to rotate within the country')),
@@ -468,6 +527,8 @@ return view.extend({
 		var rt = (this.status || {}).routing || {};
 		var body = E('div', { class: 'cbi-section-node' });
 		this.autoRouting = null;
+		this.steerBoxes = {};
+		this.steerRow = null;
 
 		if (rt.mode === 'manual') {
 			var what = [];
@@ -495,9 +556,24 @@ return view.extend({
 			this.v6Warn = E('div', { class: 'cbi-value-description nv-inline-note hidden' },
 				_('⚠ IPv6 stays outside the tunnel and can leak your address.'));
 
+			this.steerBoxes = {};
+			var current = uci.get('nordvpn', this.instance, 'source_network');
+			var currentList = Array.isArray(current) ? current : (current ? [ current ] : []);
+			var nets = rt.networks || [];
+			this.steerWrap = E('div', { class: 'nv-inline', style: 'gap:1em' }, nets.map(L.bind(function(n) {
+				var cb = E('input', { type: 'checkbox', change: L.bind(this.onRoutingToggle, this) });
+				cb.checked = currentList.indexOf(n) >= 0;
+				this.steerBoxes[n] = cb;
+				return E('label', { class: 'nv-check' }, [ cb, n ]);
+			}, this)));
+
 			body.appendChild(this.row(_('Traffic routing'), [
 				E('label', { class: 'nv-check' }, [ this.autoRouting, _('Route all LAN traffic through the VPN') ])
 			], _('Creates a firewall zone and a default route via the tunnel; disabling removes exactly what was created.')));
+			this.steerRow = this.row(_('Steered networks'), [ this.steerWrap ],
+				_('Or route only these networks through this instance — policy rules send their traffic into its routing table.'));
+			if (nets.length)
+				body.appendChild(this.steerRow);
 			this.ksRow = this.row(_('Kill switch'), [
 				E('label', { class: 'nv-check' }, [ this.ksBox, _('Block LAN internet access while the VPN is down') ])
 			]);
@@ -520,10 +596,20 @@ return view.extend({
 		]);
 	},
 
+	steeredNetworks: function() {
+		var out = [];
+		for (var k in (this.steerBoxes || {}))
+			if (this.steerBoxes[k].checked)
+				out.push(k);
+		return out;
+	},
+
 	onRoutingToggle: function(init) {
 		if (init !== true)
 			this.markDirty();
-		var on = this.autoRouting && this.autoRouting.checked;
+		var auto = this.autoRouting && this.autoRouting.checked;
+		var on = auto || this.steeredNetworks().length > 0;
+		if (this.steerRow) this.steerRow.classList.toggle('hidden', !!auto);
 		if (this.ksRow) this.ksRow.classList.toggle('hidden', !on);
 		if (this.v6Row) this.v6Row.classList.toggle('hidden', !on);
 		if (this.dnsRow) this.dnsRow.classList.toggle('hidden', !on);
@@ -874,10 +960,27 @@ return view.extend({
 		// Routing toggles exist only when no manual scheme was detected; a
 		// manual setup's options are never written.
 		if (this.autoRouting) {
-			uci.set('nordvpn', inst, 'auto_routing', this.autoRouting.checked ? '1' : '0');
+			var autoOn = this.autoRouting.checked;
+			var steered = autoOn ? [] : this.steeredNetworks();
+			uci.set('nordvpn', inst, 'auto_routing', autoOn ? '1' : '0');
 			uci.set('nordvpn', inst, 'killswitch', (this.ksBox && this.ksBox.checked) ? '1' : '0');
 			uci.set('nordvpn', inst, 'block_ipv6', (this.v6Box && this.v6Box.checked) ? '1' : '0');
 			uci.set('nordvpn', inst, 'use_vpn_dns', (this.dnsBox && this.dnsBox.checked) ? '1' : '0');
+			if (steered.length) {
+				uci.set('nordvpn', inst, 'source_network', steered);
+				// Steering needs a routing table; default to the interface name.
+				var rtb = this.refs.routing_table ? (this.refs.routing_table.value || '').trim()
+					: (uci.get('nordvpn', inst, 'routing_table') || '');
+				if (!rtb) {
+					var ifn = this.refs.interface ? (this.refs.interface.value || '').trim() : '';
+					ifn = ifn || uci.get('nordvpn', inst, 'interface') || 'nordvpn';
+					uci.set('nordvpn', inst, 'routing_table', ifn);
+					if (this.refs.routing_table)
+						this.refs.routing_table.value = ifn;
+				}
+			} else {
+				uci.unset('nordvpn', inst, 'source_network');
+			}
 		}
 
 		var rotOn = this.rotEnable && this.rotEnable.checked && !fixed;
@@ -948,6 +1051,36 @@ return view.extend({
 				E('button', { class: 'cbi-button cbi-button-action', click: L.bind(this.submitCredentials, this, field, err) }, _('Save credentials'))
 			])
 		]);
+	},
+
+	showClearCredentialsModal: function() {
+		ui.showModal(_('Remove credentials?'), [
+			E('p', {}, _('The tunnel is taken down and the stored WireGuard key is deleted from this instance. Your selection (country, schedule) is kept — enter a new token to reconnect.')),
+			E('div', { class: 'right' }, [
+				E('button', { class: 'cbi-button', click: ui.hideModal }, _('Cancel')),
+				' ',
+				E('button', { class: 'cbi-button cbi-button-negative', click: L.bind(this.clearCredentials, this) }, _('Remove'))
+			])
+		]);
+	},
+
+	clearCredentials: function() {
+		ui.hideModal();
+		var n = this.notice(_('Removing credentials…'), 'info');
+		return callClearCredentials(this.instance).then(L.bind(function(res) {
+			this.dismiss(n);
+			if (res && res.error) {
+				this.notice(_('Failed: %s').format(res.error), 'error');
+				return;
+			}
+			this.notice(_('Credentials removed.'), 'info', 4000);
+			return this.refreshStatus().then(L.bind(function() {
+				dom.content(this.formNode, this.buildFormSections());
+			}, this));
+		}, this)).catch(L.bind(function(e) {
+			this.dismiss(n);
+			this.notice(_('Failed: %s').format(e), 'error');
+		}, this));
 	},
 
 	submitCredentials: function(field, err, ev) {

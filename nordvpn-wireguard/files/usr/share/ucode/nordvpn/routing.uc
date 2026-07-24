@@ -267,8 +267,12 @@ function detect(uci, s, runtime) {
 	let iface = s.interface;
 	let zone = find_zone_of(uci, iface);
 	let peer = find_peer(uci, iface);
-	let user_routes = count_user_routes(uci, iface, s.routing_table);
 	let steering = length(s.source_networks || []) > 0;
+	// With steering active, extra user routes INSIDE the instance's table are
+	// legitimate companions (e.g. a media→LAN route); only routes referencing
+	// the interface itself signal a hand-built scheme. Without steering, a
+	// table reference is the manual-mode signal it always was.
+	let user_routes = count_user_routes(uci, iface, steering ? '' : s.routing_table);
 	let manual = user_routes > 0 ||
 		(!steering && s.routing_table != null && s.routing_table != '');
 

@@ -310,6 +310,18 @@ write_cache(cache, cpath);
 	eq('steer: old network rules removed', media_rules, 0);
 	eq('steer: new network gets lookup+ks+v6', guest_rules, 3);
 
+	// A user route inside the instance's table is a companion, not a manual
+	// scheme — steering stays; a route referencing the interface forces manual.
+	global.MOCK_UCI.network.companion = { '.type': 'route', interface: 'lan',
+		target: '10.0.0.0/24', table: 'nv_media' };
+	eq('steer: companion route in table keeps steering',
+		detect_routing(uci, ssteer({ source_networks: [ 'guest' ] }), false).mode, 'steered');
+	global.MOCK_UCI.network.takeover = { '.type': 'route', interface: 'nordvpn_rs', target: '0.0.0.0/0' };
+	eq('steer: interface route forces manual',
+		detect_routing(uci, ssteer({ source_networks: [ 'guest' ] }), false).mode, 'manual');
+	delete global.MOCK_UCI.network.companion;
+	delete global.MOCK_UCI.network.takeover;
+
 	// A missing routing table disables steering with a note, creating nothing.
 	global.MOCK_UCI = { network: { nordvpn_rs: { '.type': 'interface', proto: 'wireguard' } }, firewall: {} };
 	uci = cursor();

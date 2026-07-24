@@ -542,6 +542,7 @@ return view.extend({
 			.then(function() { return uci.apply(); })
 			.then(L.bind(function() {
 				this.dirty = false;
+				this.clearChangeIndicator();
 				this.dismiss(p);
 				p = this.notice(_('Applying and reconnecting…'), 'info');
 				return callApply();
@@ -656,6 +657,16 @@ return view.extend({
 		try {
 			if (node && node.parentNode)
 				node.parentNode.removeChild(node);
+		} catch (e) {}
+	},
+
+	// Our custom save calls uci.apply() directly (the framework's apply would
+	// reload the page and abort the reconnect), so clear the global "Unsaved
+	// Changes" indicator ourselves once our commit has gone through.
+	clearChangeIndicator: function() {
+		try {
+			if (L.ui && L.ui.changes)
+				L.ui.changes.setIndicator(0);
 		} catch (e) {}
 	}
 });

@@ -23,4 +23,32 @@ function should_rotate(settings, last_rotate, now, hm) {
 	return (now - last_rotate) >= (settings.rotation_interval * 60);
 }
 
-return { should_refresh, should_rotate };
+// Epoch seconds of the next scheduled rotation, or null when rotation cannot
+// run (master switch off, rotation disabled, or a fixed server pinned).
+// `last_rotate` is the persisted last-attempt epoch, 0 when unknown. Mirrors
+// the gating of should_rotate() so the UI never announces a rotation that the
+// daemon would refuse to perform.
+function next_rotation(settings, last_rotate, now) {
+	if (!settings.enabled || !settings.rotation_enabled)
+		return null;
+	if (settings.fixed_server && settings.fixed_server != '')
+		return null;
+	if (settings.rotation_mode == 'time') {
+		let hm = split(settings.rotation_time, ':');
+		let tm = localtime(now);
+		tm.hour = int(hm[0]);
+		tm.min = int(hm[1]);
+		tm.sec = 0;
+		let t = timelocal(tm);
+		if (t <= now) {
+			tm.mday += 1; // timelocal() normalizes month/year overflow
+			t = timelocal(tm);
+		}
+		return t;
+	}
+	let base = (last_rotate && last_rotate > 0) ? last_rotate : now;
+	let t = base + settings.rotation_interval * 60;
+	return t < now ? now : t;
+}
+
+return { should_refresh, should_rotate, next_rotation };

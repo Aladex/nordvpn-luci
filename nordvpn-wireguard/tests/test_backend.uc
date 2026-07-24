@@ -18,7 +18,8 @@ const status = require('nordvpn.status').status;
 const _rotate = require('nordvpn.rotate');
 const shuffle = _rotate.shuffle, plan_candidates = _rotate.plan_candidates;
 const _service = require('nordvpn.service');
-const should_refresh = _service.should_refresh, should_rotate = _service.should_rotate;
+const should_refresh = _service.should_refresh, should_rotate = _service.should_rotate,
+      next_rotation = _service.next_rotation;
 import { cursor } from 'uci';
 
 let fails = 0;
@@ -160,6 +161,27 @@ write_cache(cache, cpath);
 	let st = { ...s, rotation_mode: 'time', rotation_time: '04:30' };
 	ok('rotate at matching time', should_rotate(st, 0, 999999, '04:30') == true);
 	ok('no rotate at other time', should_rotate(st, 0, 999999, '04:31') == false);
+}
+
+// 7b. next rotation time (pure)
+{
+	let s = { enabled: true, rotation_enabled: true, fixed_server: '',
+		rotation_mode: 'interval', rotation_interval: 360, rotation_time: '04:30' };
+	let now = time();
+
+	eq('next_run from last attempt', next_rotation(s, 1000, 500), 1000 + 360 * 60);
+	eq('next_run without history', next_rotation(s, 0, now), now + 360 * 60);
+	eq('next_run overdue clamps to now', next_rotation(s, 100, 999999), 999999);
+	eq('next_run null when rotation off', next_rotation({ ...s, rotation_enabled: false }, 0, now), null);
+	eq('next_run null when master off', next_rotation({ ...s, enabled: false }, 0, now), null);
+	eq('next_run null with fixed server', next_rotation({ ...s, fixed_server: 'ee70.nordvpn.com' }, 0, now), null);
+
+	let st = { ...s, rotation_mode: 'time' };
+	let nr = next_rotation(st, 0, now);
+	ok('time mode is in the future', nr > now);
+	ok('time mode within 24h', (nr - now) <= 86400);
+	let lt = localtime(nr);
+	ok('time mode lands on 04:30:00', lt.hour == 4 && lt.min == 30 && lt.sec == 0);
 }
 
 unlink(cpath);

@@ -256,6 +256,86 @@ write_cache(cache, cpath);
 	eq('routing: off restores pristine config', sprintf('%J', global.MOCK_UCI), pristine);
 }
 
+// 8b. source-network steering: lookup/prohibit rules, reconciliation, teardown
+{
+	let ssteer = function(over) {
+		let base = { interface: 'nordvpn_rs', routing_table: 'nv_media', auto_routing: false,
+			killswitch: false, block_ipv6: true, use_vpn_dns: false, source_networks: [ 'media' ] };
+		for (let k in over)
+			base[k] = over[k];
+		return base;
+	};
+	global.MOCK_UCI = { network: {
+		nordvpn_rs: { '.type': 'interface', proto: 'wireguard', private_key: KEY },
+		peer_rs: { '.type': 'wireguard_nordvpn_rs', interface: 'nordvpn_rs', endpoint_host: 'x.nordvpn.com' },
+		media: { '.type': 'interface', proto: 'static' },
+		guest: { '.type': 'interface', proto: 'static' }
+	}, firewall: {
+		zlan: { '.type': 'zone', name: 'lan', network: [ 'lan' ] },
+		zwan: { '.type': 'zone', name: 'wan', masq: '1', network: [ 'wan' ] },
+		zmedia: { '.type': 'zone', name: 'media', network: [ 'media' ] }
+	} };
+	let uci = cursor();
+	let pris = sprintf('%J', global.MOCK_UCI);
+
+	let res = enforce_routing(uci, ssteer({}));
+	ok('steer: changed network', res.changed_network);
+	ok('steer: changed firewall', res.changed_firewall);
+	let det = detect_routing(uci, ssteer({}), false);
+	eq('steer: mode', det.mode, 'steered');
+	eq('steer: zone named after iface', det.zone, 'nordvpn_rs');
+	ok('steer: default route into table', det.route_allowed_ips);
+	ok('steer: v6 block on by default', det.ipv6_block);
+	ok('steer: no kill switch by default', !det.killswitch);
+	ok('steer: networks listed', index(det.networks, 'media') >= 0 && index(det.networks, 'nordvpn_rs') < 0);
+
+	let lookup = null;
+	for (let k in global.MOCK_UCI.network) {
+		let sec = global.MOCK_UCI.network[k];
+		if (sec['.type'] == 'rule' && sec['in'] == 'media' && sec.nordvpn_managed == '1' && sec.lookup)
+			lookup = sec;
+	}
+	ok('steer: media lookup rule targets the table', lookup != null && lookup.lookup == 'nv_media');
+
+	// Reconciliation: switch the steering to another network, kill switch on.
+	res = enforce_routing(uci, ssteer({ source_networks: [ 'guest' ], killswitch: true }));
+	let media_rules = 0, guest_rules = 0;
+	for (let k in global.MOCK_UCI.network) {
+		let sec = global.MOCK_UCI.network[k];
+		if ((sec['.type'] == 'rule' || sec['.type'] == 'rule6') && sec.nordvpn_managed == '1') {
+			if (sec['in'] == 'media') media_rules++;
+			if (sec['in'] == 'guest') guest_rules++;
+		}
+	}
+	eq('steer: old network rules removed', media_rules, 0);
+	eq('steer: new network gets lookup+ks+v6', guest_rules, 3);
+
+	// A missing routing table disables steering with a note, creating nothing.
+	global.MOCK_UCI = { network: { nordvpn_rs: { '.type': 'interface', proto: 'wireguard' } }, firewall: {} };
+	uci = cursor();
+	let before = sprintf('%J', global.MOCK_UCI);
+	res = enforce_routing(uci, ssteer({ routing_table: '' }));
+	eq('steer: no table -> untouched', sprintf('%J', global.MOCK_UCI), before);
+	ok('steer: no table -> note', length(res.notes) > 0);
+
+	// Teardown restores the pristine configuration.
+	global.MOCK_UCI = { network: {
+		nordvpn_rs: { '.type': 'interface', proto: 'wireguard', private_key: KEY },
+		peer_rs: { '.type': 'wireguard_nordvpn_rs', interface: 'nordvpn_rs', endpoint_host: 'x.nordvpn.com' },
+		media: { '.type': 'interface', proto: 'static' },
+		guest: { '.type': 'interface', proto: 'static' }
+	}, firewall: {
+		zlan: { '.type': 'zone', name: 'lan', network: [ 'lan' ] },
+		zwan: { '.type': 'zone', name: 'wan', masq: '1', network: [ 'wan' ] },
+		zmedia: { '.type': 'zone', name: 'media', network: [ 'media' ] }
+	} };
+	uci = cursor();
+	pris = sprintf('%J', global.MOCK_UCI);
+	enforce_routing(uci, ssteer({ killswitch: true }));
+	enforce_routing(uci, ssteer({ source_networks: [] }));
+	eq('steer: teardown restores pristine config', sprintf('%J', global.MOCK_UCI), pris);
+}
+
 // 9. multi-instance: settings, listing, isolated state, per-instance status
 {
 	global.MOCK_UCI = { nordvpn: {

@@ -226,8 +226,20 @@ function load_settings(uci, instance) {
 		return (v == null || v == '') ? dflt : v;
 	};
 
+	// `list source_network` — logical networks steered through this instance.
+	let sn = uci.get('nordvpn', name, 'source_network');
+	let source_networks = [];
+	if (type(sn) == 'array') {
+		for (let x in sn)
+			if (validate_interface(x))
+				push(source_networks, x);
+	} else if (type(sn) == 'string' && validate_interface(sn)) {
+		push(source_networks, sn);
+	}
+
 	return {
 		name: name,
+		source_networks: source_networks,
 		enabled: g('enabled', '0') == '1',
 		interface: validate_interface(g('interface', DEFAULT_INTERFACE)) || DEFAULT_INTERFACE,
 		routing_table: g('routing_table', ''),

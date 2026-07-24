@@ -117,27 +117,124 @@ function wan_has_ipv6() {
 	return r.code == 0 && length(trim(r.stdout || '')) > 0;
 }
 
+// Logical networks a user could steer through an instance: every interface
+// section except loopback and WireGuard tunnels.
+function available_networks(uci) {
+	let out = [];
+	uci.foreach('network', 'interface', function(sec) {
+		if (sec['.name'] == 'loopback' || sec.proto == 'wireguard')
+			return;
+		push(out, sec['.name']);
+	});
+	return out;
+}
+
+// Stamped netifd rule sections (rule/rule6) of one instance and role.
+function find_managed_rules(uci, sectype, role, iface) {
+	let out = [];
+	uci.foreach('network', sectype, function(sec) {
+		if (sec[MARK] == '1' && sec[ROLE] == role && sec.nordvpn_iface == iface)
+			push(out, { section: sec['.name'], net: sec['in'] });
+	});
+	return out;
+}
+
+// Reconcile stamped netifd rules with the desired source-network list:
+// delete stamped rules for nets no longer wanted, create missing ones.
+// `mkopts(net)` returns the option map for a new rule. Returns true on change.
+function reconcile_rules(uci, sectype, role, iface, want_nets, mkopts) {
+	let changed = false;
+	let have = find_managed_rules(uci, sectype, role, iface);
+	for (let r in have) {
+		if (index(want_nets, r.net) < 0) {
+			uci.delete('network', r.section);
+			changed = true;
+		}
+	}
+	for (let net in want_nets) {
+		let present = false;
+		for (let r in have)
+			if (r.net == net)
+				present = true;
+		if (!present) {
+			let sec = uci.add('network', sectype);
+			let opts = mkopts(net);
+			for (let k in opts)
+				uci.set('network', sec, k, opts[k]);
+			uci.set('network', sec, MARK, '1');
+			uci.set('network', sec, ROLE, role);
+			uci.set('network', sec, 'nordvpn_iface', iface);
+			changed = true;
+		}
+	}
+	return changed;
+}
+
+// Reconcile stamped firewall forwardings (into the instance zone) with the
+// desired source-zone list. Returns true on change.
+function reconcile_forwardings(uci, iface, dest_zone, want_srcs) {
+	let changed = false;
+	let have = [];
+	uci.foreach('firewall', 'forwarding', function(sec) {
+		if (sec[MARK] == '1' && sec[ROLE] == 'forwarding' && sec.nordvpn_iface == iface)
+			push(have, { section: sec['.name'], src: sec.src });
+	});
+	for (let f in have) {
+		if (index(want_srcs, f.src) < 0) {
+			uci.delete('firewall', f.section);
+			changed = true;
+		}
+	}
+	for (let src in want_srcs) {
+		let present = false;
+		for (let f in have)
+			if (f.src == src)
+				present = true;
+		if (!present) {
+			let sec = uci.add('firewall', 'forwarding');
+			uci.set('firewall', sec, 'src', src);
+			uci.set('firewall', sec, 'dest', dest_zone);
+			uci.set('firewall', sec, MARK, '1');
+			uci.set('firewall', sec, ROLE, 'forwarding');
+			uci.set('firewall', sec, 'nordvpn_iface', iface);
+			changed = true;
+		}
+	}
+	return changed;
+}
+
 // ── Detection (read-only) ────────────────────────────────────────────
 
 // Classify the routing situation for the UI and for enforce(). `runtime`
 // enables checks that need external commands (disabled in offline tests).
+// Modes: 'manual'  — unstamped user routes/rules reference the interface or
+//                    its table, or a table is set without steering: never touch;
+//        'auto'    — route everything (auto_routing);
+//        'steered' — route the configured source networks via the instance table;
+//        'none'    — tunnel only, no managed routing.
 function detect(uci, s, runtime) {
 	let iface = s.interface;
 	let zone = find_zone_of(uci, iface);
 	let peer = find_peer(uci, iface);
 	let user_routes = count_user_routes(uci, iface, s.routing_table);
-	let manual = (s.routing_table != null && s.routing_table != '') || user_routes > 0;
+	let steering = length(s.source_networks || []) > 0;
+	let manual = user_routes > 0 ||
+		(!steering && s.routing_table != null && s.routing_table != '');
 
 	return {
-		mode: manual ? 'manual' : (s.auto_routing ? 'auto' : 'none'),
+		mode: manual ? 'manual' : (s.auto_routing ? 'auto' : (steering ? 'steered' : 'none')),
 		zone: zone ? zone.name : null,
 		zone_managed: zone ? zone.managed : false,
 		user_routes: user_routes,
+		source_networks: s.source_networks || [],
 		route_allowed_ips: peer ? (uci.get('network', peer, 'route_allowed_ips') == '1') : false,
-		killswitch: find_managed(uci, 'rule', 'killswitch') != null,
-		ipv6_block: find_managed(uci, 'rule', 'ipv6block') != null,
+		killswitch: find_managed(uci, 'rule', 'killswitch') != null ||
+			length(find_managed_rules(uci, 'rule', 'steer_ks', iface)) > 0,
+		ipv6_block: find_managed(uci, 'rule', 'ipv6block') != null ||
+			length(find_managed_rules(uci, 'rule6', 'steer_v6', iface)) > 0,
 		wan_zone: find_wan_zone(uci),
 		lan_zone: find_lan_zone(uci),
+		networks: available_networks(uci),
 		ipv6_wan: runtime ? wan_has_ipv6() : null
 	};
 }
@@ -153,12 +250,19 @@ function enforce(uci, s) {
 	let cn = false, cf = false;
 	let iface = s.interface;
 	let det = detect(uci, s, false);
-	let auto = s.auto_routing && det.mode != 'manual';
+	let auto = (det.mode == 'auto');
+	let steer = (det.mode == 'steered');
+	if (steer && (s.routing_table == null || s.routing_table == '')) {
+		push(notes, 'steering needs a routing table; set one for this instance');
+		steer = false;
+	}
+	let managed = auto || steer;
 	let peer = find_peer(uci, iface);
 
-	// 1. Default route via the tunnel (netifd routes for allowed_ips). Stamped
-	//    on the interface so a user-set route_allowed_ips is never removed.
-	if (auto) {
+	// 1. Routes via the tunnel (netifd routes for allowed_ips; they land in the
+	//    instance's ip4table when a routing table is set). Stamped on the
+	//    interface so a user-set route_allowed_ips is never removed.
+	if (managed) {
 		if (peer && uci.get('network', peer, 'route_allowed_ips') != '1') {
 			uci.set('network', peer, 'route_allowed_ips', '1');
 			uci.set('network', iface, MARK + '_routing', '1');
@@ -173,9 +277,31 @@ function enforce(uci, s) {
 			push(notes, 'manual routing detected; automatic default route removed');
 	}
 
-	// 2. Firewall zone + forwarding from the LAN zone. The zone is named after
-	//    the interface so every instance gets its own.
-	if (auto) {
+	// 1b. Steering rules: per source network, a lookup rule into the instance
+	//     table, plus prohibit rules that act as kill switch (IPv4, only when
+	//     enabled) and IPv6 leak block (the tunnel carries no IPv6). Prohibit
+	//     sits between the lookup and the main table, so it only fires when
+	//     the tunnel's table cannot serve the traffic.
+	let steer_nets = steer ? s.source_networks : [];
+	let table = s.routing_table;
+	if (reconcile_rules(uci, 'rule', 'steer_lookup', iface, steer_nets, function(net) {
+		return { 'in': net, lookup: table, priority: '20000' };
+	}))
+		cn = true;
+	if (reconcile_rules(uci, 'rule', 'steer_ks', iface, (steer && s.killswitch) ? steer_nets : [], function(net) {
+		return { 'in': net, action: 'prohibit', priority: '21000' };
+	}))
+		cn = true;
+	if (reconcile_rules(uci, 'rule6', 'steer_v6', iface, (steer && s.block_ipv6) ? steer_nets : [], function(net) {
+		return { 'in': net, action: 'prohibit', priority: '21000' };
+	}))
+		cn = true;
+
+	// 2. Firewall zone (named after the interface, one per instance) and
+	//    forwardings into it from the source zones: the LAN zone in auto mode,
+	//    the zones holding the steered networks in steered mode. Sources
+	//    already covered by an unstamped user forwarding are skipped.
+	if (managed) {
 		if (!det.zone) {
 			let clash = false;
 			uci.foreach('firewall', 'zone', function(sec) {
@@ -202,34 +328,40 @@ function enforce(uci, s) {
 				det.zone = iface;
 			}
 		}
-		if (det.zone && !find_managed(uci, 'forwarding', 'forwarding', iface)) {
-			let has_fwd = false;
-			uci.foreach('firewall', 'forwarding', function(sec) {
-				if (sec.dest == det.zone) {
-					has_fwd = true;
-					return false;
-				}
-			});
-			if (!has_fwd) {
-				if (det.lan_zone) {
-					let f = uci.add('firewall', 'forwarding');
-					uci.set('firewall', f, 'src', det.lan_zone);
-					uci.set('firewall', f, 'dest', det.zone);
-					uci.set('firewall', f, MARK, '1');
-					uci.set('firewall', f, ROLE, 'forwarding');
-					uci.set('firewall', f, 'nordvpn_iface', iface);
-					cf = true;
-				} else {
+		if (det.zone) {
+			let want_srcs = [];
+			if (auto) {
+				if (det.lan_zone)
+					push(want_srcs, det.lan_zone);
+				else
 					push(notes, 'could not determine the LAN zone; add a forwarding to the VPN zone manually');
+			} else {
+				for (let net in steer_nets) {
+					let z = find_zone_of(uci, net);
+					if (!z)
+						push(notes, 'network ' + net + ' is in no firewall zone; add a forwarding to the VPN zone manually');
+					else if (index(want_srcs, z.name) < 0)
+						push(want_srcs, z.name);
 				}
 			}
+			let filtered = [];
+			for (let src in want_srcs) {
+				let covered = false;
+				uci.foreach('firewall', 'forwarding', function(sec) {
+					if (sec[MARK] != '1' && sec.dest == det.zone && sec.src == src) {
+						covered = true;
+						return false;
+					}
+				});
+				if (!covered)
+					push(filtered, src);
+			}
+			if (reconcile_forwardings(uci, iface, det.zone, filtered))
+				cf = true;
 		}
 	} else {
-		let f = find_managed(uci, 'forwarding', 'forwarding', iface);
-		if (f) {
-			uci.delete('firewall', f);
+		if (reconcile_forwardings(uci, iface, det.zone || '', []))
 			cf = true;
-		}
 		let z = find_managed(uci, 'zone', 'zone', iface);
 		if (z) {
 			uci.delete('firewall', z);
@@ -284,7 +416,7 @@ function enforce(uci, s) {
 	}
 
 	// 5. DNS override on the interface (stamped, netifd-managed lifecycle).
-	let want_dns = auto && s.use_vpn_dns;
+	let want_dns = managed && s.use_vpn_dns;
 	if (want_dns && uci.get('network', iface, MARK + '_dns') != '1') {
 		uci.set('network', iface, 'dns', split(VPN_DNS, ' '));
 		uci.set('network', iface, MARK + '_dns', '1');

@@ -94,6 +94,21 @@ fi
 uci -q delete "$pkg.main.ping_count"
 uci -q delete "$pkg.main.ping_timeout"
 
+# The legacy Lua app kept its settings on the network interface section; the
+# new backend owns them in /etc/config/nordvpn. Drop the leftovers from the
+# managed interface (idempotent; the live tunnel is untouched).
+_managed_if="$(uci -q get "$pkg.main.interface")"
+if [ -n "$_managed_if" ] && [ -n "$(uci -q get "network.$_managed_if")" ]; then
+	for _o in nordvpn_token nordvpn_server_name nordvpn_server_hostname \
+		nordvpn_fixed_server nordvpn_cache_dir nordvpn_hop_mode \
+		nordvpn_ping_count nordvpn_ping_timeout nordvpn_max_retries \
+		nordvpn_rotation_enabled nordvpn_rotation_mode \
+		nordvpn_rotation_interval nordvpn_rotation_time; do
+		uci -q delete "network.$_managed_if.$_o"
+	done
+	[ -n "$(uci -q changes network)" ] && uci -q commit network
+fi
+
 [ -n "$(uci -q changes "$pkg")" ] && uci commit "$pkg"
 
 exit 0

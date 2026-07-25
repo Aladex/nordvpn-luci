@@ -176,6 +176,7 @@ config instance 'main'
 	option enabled '0'
 	option interface 'nordvpn'
 	option routing_table ''
+	option mtu ''                     # пусто = дефолт 1420; UI советует WAN-80
 	option hop_mode 'single'          # 'multihop' (Double VPN) / 'onion' (via Tor)
 	option country_code 'ee'
 	option city_code 'ee-tallinn'
@@ -199,6 +200,13 @@ config instance 'main'
 **Advanced settings**, Расширенные настройки):
 
 ![Расширенные настройки](docs/screenshots/advanced.png)
+
+**MTU** оставлен на дефолт netifd для WireGuard (1420), пока вы его не зададите.
+Страница считает рекомендацию из MTU вашего WAN (`WAN − 80` — накладные расходы
+WireGuard/UDP/IPv4 плюс запас; например, 1412 на 1492 PPPoE, ровно как у NordLynx)
+и предлагает кнопку **Use recommended** в один клик. Опустите его, если страницы
+или Gmail подвисают либо плохой throughput; LTE/5G-аплинки часто требуют меньше.
+TCP MSS-clamping (`mtu_fix`) остаётся как страховка.
 
 Сгенерированный интерфейс/пир WireGuard находятся в `/etc/config/network` и
 управляются бэкендом. Приватный ключ хранится там для netifd, но никогда не

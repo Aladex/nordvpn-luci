@@ -23,7 +23,8 @@ const _service = require('nordvpn.service');
 const should_refresh = _service.should_refresh, should_rotate = _service.should_rotate,
       next_rotation = _service.next_rotation;
 const _routing = require('nordvpn.routing');
-const detect_routing = _routing.detect, enforce_routing = _routing.enforce;
+const detect_routing = _routing.detect, enforce_routing = _routing.enforce,
+      recommend_mtu = _routing.recommend_mtu;
 import { cursor } from 'uci';
 
 let fails = 0;
@@ -462,6 +463,17 @@ write_cache(cache, cpath);
 	eq('status per instance: media configured', status(uci, 'media').configured, true);
 	eq('status per instance: main not configured', status(uci, 'main').configured, false);
 	eq('status carries the instance name', status(uci, 'media').instance, 'media');
+}
+
+// 10. MTU recommendation (pure): WAN MTU minus 80, clamped to [1280, 1420].
+{
+	eq('mtu 1500 -> 1420 (vendor default)', recommend_mtu(1500), 1420);
+	eq('mtu 1492 PPPoE -> 1412', recommend_mtu(1492), 1412);
+	eq('mtu 1428 LTE -> 1348', recommend_mtu(1428), 1348);
+	eq('mtu clamps up to the 1280 IPv6 floor', recommend_mtu(1350), 1280);
+	eq('mtu clamps down to the 1420 ceiling', recommend_mtu(1600), 1420);
+	eq('mtu null when WAN unknown', recommend_mtu(null), null);
+	eq('mtu null on zero/garbage', recommend_mtu(0), null);
 }
 
 unlink(cpath);

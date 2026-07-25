@@ -250,6 +250,12 @@ function load_settings(uci, instance) {
 		enabled: g('enabled', '0') == '1',
 		interface: validate_interface(g('interface', DEFAULT_INTERFACE)) || DEFAULT_INTERFACE,
 		routing_table: g('routing_table', ''),
+		// Optional WireGuard interface MTU override; null = keep the netifd
+		// default (1420). Clamped to the valid Ethernet/IPv6 range.
+		mtu: (function() {
+			let v = int(g('mtu', '0'));
+			return (v >= 1280 && v <= 1500) ? v : null;
+		})(),
 		hop_mode: validate_hop_mode(g('hop_mode', 'single')) || 'single',
 		country_code: g('country_code', ''),
 		city_code: g('city_code', ''),

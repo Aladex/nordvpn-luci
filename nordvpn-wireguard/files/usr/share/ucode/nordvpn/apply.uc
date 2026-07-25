@@ -109,6 +109,12 @@ function write_relay(uci, iface, relay, s) {
 		uci.delete('network', iface, 'ip6table');
 	}
 
+	// Optional MTU override; empty falls back to netifd's WireGuard default.
+	if (s.mtu)
+		uci.set('network', iface, 'mtu', '' + s.mtu);
+	else
+		uci.delete('network', iface, 'mtu');
+
 	uci.set('network', iface, 'nordvpn_location', relay.location);
 	uci.set('network', iface, 'nordvpn_country_code', s.country_code);
 	uci.set('network', iface, 'nordvpn_city_code', s.city_code);

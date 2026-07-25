@@ -177,6 +177,7 @@ config instance 'main'
 	option enabled '0'
 	option interface 'nordvpn'
 	option routing_table ''
+	option mtu ''                     # leer = Standard 1420; UI empfiehlt WAN-80
 	option hop_mode 'single'          # 'multihop' (Double VPN) / 'onion' (via Tor)
 	option country_code 'ee'
 	option city_code 'ee-tallinn'
@@ -200,6 +201,14 @@ All dies lässt sich über die LuCI-Seite bearbeiten (das meiste unter
 **Erweiterte Einstellungen** / Advanced settings):
 
 ![Erweiterte Einstellungen](docs/screenshots/advanced.png)
+
+Die **MTU** bleibt beim WireGuard-Standard von netifd (1420), sofern du sie
+nicht setzt. Die Seite berechnet eine Empfehlung aus der MTU deines WAN
+(`WAN − 80` — WireGuard/UDP/IPv4-Overhead plus Sicherheitsreserve; z. B. 1412
+bei 1492 PPPoE, genau wie NordLynx) und bietet einen Ein-Klick-Button
+**Use recommended**. Senke sie, wenn Seiten oder Gmail hängen oder der
+Durchsatz schlecht ist; LTE/5G-Uplinks brauchen oft weniger. TCP-MSS-Clamping
+(`mtu_fix`) bleibt als Absicherung aktiv.
 
 Das erzeugte WireGuard-Interface/-Peer liegt in `/etc/config/network` und wird
 vom Backend verwaltet. Der private Schlüssel wird dort für netifd gespeichert,

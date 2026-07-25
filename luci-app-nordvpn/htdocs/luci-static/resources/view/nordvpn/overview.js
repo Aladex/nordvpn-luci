@@ -765,11 +765,30 @@ return view.extend({
 		var gm = function(o, d) { return uci.get('nordvpn', 'main', o) || d; };
 		this.cacheRow = E('span', {}, this.cacheSummary());
 
+		// MTU with a WAN-derived recommendation (backend computes WAN_MTU - 80).
+		var rtx = (this.status || {}).routing || {};
+		var recMtu = rtx.recommended_mtu;
+		var mtuInput = this.input('mtu', 'number', g('mtu', ''),
+			{ min: 1280, max: 1500, style: 'width:90px', placeholder: recMtu ? ('' + recMtu) : '1420' });
+		var mtuCtl = [ mtuInput ];
+		if (recMtu) {
+			mtuCtl.push(' ');
+			mtuCtl.push(E('button', { class: 'cbi-button', click: L.bind(function(ev) {
+				ev.preventDefault();
+				mtuInput.value = recMtu;
+				this.markDirty();
+			}, this) }, _('Use recommended')));
+		}
+		var mtuDesc = recMtu
+			? _('Recommended %d for your WAN (MTU %d). Empty = the default (1420). Lower it if sites/Gmail hang or throughput is poor — LTE/5G often need less.').format(recMtu, rtx.wan_mtu || 0)
+			: _('WireGuard interface MTU. Empty = the netifd default (1420).');
+
 		var body = E('div', { class: 'cbi-section-node' }, [
 			this.row(_('Interface name'), [ this.input('interface', 'text', g('interface', 'nordvpn')) ],
 				_('Name of the managed WireGuard interface. ⚠ Changing it after setup recreates the tunnel under the new name and orphans the old interface’s firewall/routing objects.')),
 			this.row(_('Routing table'), [ this.input('routing_table', 'text', g('routing_table', ''), { placeholder: 'main' }) ],
 				_('Custom routing table (empty = the interface name when steering, otherwise the main table).')),
+			this.row(_('MTU'), mtuCtl, mtuDesc),
 			this.row(_('Connection wait (seconds)'), [ this.input('verify_timeout', 'number', g('verify_timeout', '8'), { min: 2, max: 30, style: 'width:80px' }) ],
 				_('How long to wait for a WireGuard handshake before giving up on a server')),
 			this.maxRetriesRow = this.row(_('Max server attempts'), [ this.input('max_retries', 'number', g('max_retries', '10'), { min: 1, max: 50, style: 'width:80px' }) ],
@@ -1014,7 +1033,7 @@ return view.extend({
 			else
 				uci.set('nordvpn', sec, o, v);
 		};
-		[ 'interface', 'routing_table', 'verify_timeout', 'max_retries' ].forEach(L.bind(function(k) {
+		[ 'interface', 'routing_table', 'verify_timeout', 'max_retries', 'mtu' ].forEach(L.bind(function(k) {
 			if (this.refs[k]) setv(k, (this.refs[k].value || '').trim());
 		}, this));
 		// The cache directory is shared and lives on the 'main' section.

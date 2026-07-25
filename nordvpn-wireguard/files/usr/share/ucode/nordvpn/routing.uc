@@ -406,6 +406,60 @@ function wan_has_ipv6() {
 	return r.code == 0 && length(trim(r.stdout || '')) > 0;
 }
 
+// L3-device MTU of the WAN uplink (the path WireGuard's UDP actually takes to
+// the endpoint — NOT the tunnel). Found via the WAN firewall zone's networks so
+// an active auto-routing default through the tunnel does not mislead us. Returns
+// the smallest MTU across WAN devices, or null when it cannot be determined.
+function wan_l3_mtu(uci) {
+	let wannets = {};
+	uci.foreach('firewall', 'zone', function(sec) {
+		if (sec[MARK] == '1')
+			return;
+		if (sec.masq == '1' || sec.name == 'wan')
+			for (let n in as_list(sec.network))
+				wannets[n] = 1;
+	});
+	let d = run([ 'ubus', 'call', 'network.interface', 'dump' ]);
+	if (d.code != 0)
+		return null;
+	let data;
+	try {
+		data = json(d.stdout);
+	} catch (e) {
+		return null;
+	}
+	let best = null;
+	for (let ifc in ((data ? data.interface : null) || [])) {
+		if (!ifc.up || !ifc.l3_device || !wannets[ifc.interface])
+			continue;
+		let l = run([ 'ip', 'link', 'show', 'dev', ifc.l3_device ]);
+		if (l.code != 0)
+			continue;
+		let m = match(l.stdout || '', /mtu ([0-9]+)/);
+		if (m) {
+			let v = int(m[1]);
+			if (best == null || v < best)
+				best = v;
+		}
+	}
+	return best;
+}
+
+// Recommended WireGuard interface MTU for a given WAN MTU: subtract 80 (60 bytes
+// of real WG/UDP/IPv4 overhead + 20 safety, matching NordLynx's 1420 on a 1500
+// path and 1412 on 1492 PPPoE), clamped to [1280 (IPv6 minimum), 1420 (vendor
+// maximum)]. Null when the WAN MTU is unknown.
+function recommend_mtu(wanmtu) {
+	if (type(wanmtu) != 'int' || wanmtu <= 0)
+		return null;
+	let v = wanmtu - 80;
+	if (v < 1280)
+		v = 1280;
+	if (v > 1420)
+		v = 1420;
+	return v;
+}
+
 // Logical networks a user could steer through an instance: every interface
 // section except loopback and WireGuard tunnels.
 function available_networks(uci) {
@@ -518,6 +572,7 @@ function detect(uci, s, runtime) {
 	// panel into the hands-off view, so the table can be used for steered mode.
 	let manual = user_routes > 0;
 
+	let wanmtu = runtime ? wan_l3_mtu(uci) : null;
 	return {
 		mode: manual ? 'manual' : (s.auto_routing ? 'auto' : (steering ? 'steered' : 'none')),
 		zone: zone ? zone.name : null,
@@ -532,7 +587,9 @@ function detect(uci, s, runtime) {
 		wan_zone: find_wan_zone(uci),
 		lan_zone: find_lan_zone(uci),
 		networks: available_networks(uci),
-		ipv6_wan: runtime ? wan_has_ipv6() : null
+		ipv6_wan: runtime ? wan_has_ipv6() : null,
+		wan_mtu: wanmtu,
+		recommended_mtu: recommend_mtu(wanmtu)
 	};
 }
 
@@ -760,4 +817,4 @@ function enforce(uci, s) {
 	return { changed_network: cn, changed_firewall: cf, notes: notes };
 }
 
-return { detect, enforce, find_wan_zone, find_lan_zone, count_user_routes };
+return { detect, enforce, find_wan_zone, find_lan_zone, count_user_routes, recommend_mtu };

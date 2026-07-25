@@ -416,6 +416,13 @@ return view.extend({
 			this.updateStatusBand();
 			if (this.rotNextSpan)
 				dom.content(this.rotNextSpan, this.nextRotationText());
+			// If the detected routing mode changed underneath an idle form (no
+			// unsaved edits), rebuild it — the panel's shape depends on the mode,
+			// so it must not go stale until a manual page refresh.
+			var mode = (this.status.routing || {}).mode;
+			if (!this.dirty && this._routingMode != null && mode !== this._routingMode)
+				dom.content(this.formNode, this.buildFormSections());
+			this._routingMode = mode;
 		}, this)).catch(function() {});
 	},
 
@@ -565,16 +572,29 @@ return view.extend({
 		this.steerBoxes = {};
 		this.steerRow = null;
 
+		// Read-only context: the interface and table this instance uses, so the
+		// firewall/routing wiring is visible right here — not only in Advanced.
+		var iface = (this.status || {}).interface || g('interface', 'nordvpn');
+		var tbl = g('routing_table', '') || iface;
+		body.appendChild(this.row(_('Interface / table'), [
+			E('span', { class: 'nv-inline-note' },
+				_('Interface %s · routing table %s — edit under Advanced settings.').format(iface, tbl))
+		]));
+
 		if (rt.mode === 'manual') {
 			var what = [];
+			if (rt.user_routes)
+				what.push(_('%d custom route(s)/rule(s)').format(rt.user_routes));
 			var table = g('routing_table', '');
 			if (table)
 				what.push(_('routing table "%s"').format(table));
-			if (rt.user_routes)
-				what.push(_('%d custom routes/rules').format(rt.user_routes));
 			body.appendChild(this.row(_('Mode'), [
-				E('span', {}, _('Manual — %s detected. Routing and firewall are left untouched.')
-					.format(what.join(' + ') || _('custom configuration')))
+				E('div', {}, [
+					E('span', {}, _('Manual — %s detected. The app leaves routing and firewall untouched.')
+						.format(what.join(' + ') || _('custom configuration'))),
+					E('div', { class: 'cbi-value-description' },
+						_('Remove your own routes/rules that reference this interface to manage routing from here.'))
+				])
 			]));
 			if (rt.ipv6_wan)
 				body.appendChild(this.row('', [ E('span', { class: 'nv-inline-note' },
@@ -747,9 +767,9 @@ return view.extend({
 
 		var body = E('div', { class: 'cbi-section-node' }, [
 			this.row(_('Interface name'), [ this.input('interface', 'text', g('interface', 'nordvpn')) ],
-				_('Name of the managed WireGuard interface')),
+				_('Name of the managed WireGuard interface. ⚠ Changing it after setup recreates the tunnel under the new name and orphans the old interface’s firewall/routing objects.')),
 			this.row(_('Routing table'), [ this.input('routing_table', 'text', g('routing_table', ''), { placeholder: 'main' }) ],
-				_('Custom routing table (leave empty for the main table)')),
+				_('Custom routing table (empty = the interface name when steering, otherwise the main table).')),
 			this.row(_('Connection wait (seconds)'), [ this.input('verify_timeout', 'number', g('verify_timeout', '8'), { min: 2, max: 30, style: 'width:80px' }) ],
 				_('How long to wait for a WireGuard handshake before giving up on a server')),
 			this.maxRetriesRow = this.row(_('Max server attempts'), [ this.input('max_retries', 'number', g('max_retries', '10'), { min: 1, max: 50, style: 'width:80px' }) ],
@@ -1075,7 +1095,12 @@ return view.extend({
 					this.notice(_('Configuration saved, but the server did not respond.'), 'error');
 				else
 					this.notice(_('Could not connect: %s').format((res && res.error) || _('unknown error')), 'error');
-				return this.refreshStatus();
+				// Rebuild the form, not just the status band: a saved change may
+				// have flipped the detected routing mode (e.g. clearing the table
+				// leaves manual), and the panel's shape depends on it.
+				return this.refreshStatus().then(L.bind(function() {
+					dom.content(this.formNode, this.buildFormSections());
+				}, this));
 			}, this))
 			.catch(L.bind(function(e) {
 				this.dismiss(p);

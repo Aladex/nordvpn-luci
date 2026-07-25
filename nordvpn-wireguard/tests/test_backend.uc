@@ -228,10 +228,18 @@ write_cache(cache, cpath);
 		};
 	};
 
-	// A custom routing table means manual mode.
+	// A bare custom routing table is NOT manual on its own — only user routes
+	// or rules make it manual, so the table can be used for steered mode.
 	global.MOCK_UCI = { network: mknet(), firewall: mkfw() };
 	let uci = cursor();
-	eq('routing: manual via table', detect_routing(uci, mks({ routing_table: 'vpn' }), false).mode, 'manual');
+	eq('routing: bare table is not manual', detect_routing(uci, mks({ routing_table: 'vpn' }), false).mode, 'none');
+
+	// A user route living in the instance's table (not referencing the iface)
+	// still forces manual — that is a real hand-built policy scheme.
+	global.MOCK_UCI = { network: mknet(), firewall: mkfw() };
+	global.MOCK_UCI.network.tblroute = { '.type': 'route', interface: 'lan', target: '10.0.0.0/8', table: 'vpn' };
+	uci = cursor();
+	eq('routing: route in the table forces manual', detect_routing(uci, mks({ routing_table: 'vpn' }), false).mode, 'manual');
 
 	// A user route referencing the interface means manual mode, and enforce()
 	// must not change a single byte even with every toggle on.

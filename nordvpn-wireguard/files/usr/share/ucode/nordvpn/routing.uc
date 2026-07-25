@@ -511,8 +511,12 @@ function detect(uci, s, runtime) {
 	// the interface itself signal a hand-built scheme. Without steering, a
 	// table reference is the manual-mode signal it always was.
 	let user_routes = count_user_routes(uci, iface, steering ? '' : s.routing_table);
-	let manual = user_routes > 0 ||
-		(!steering && s.routing_table != null && s.routing_table != '');
+	// A bare routing_table is NOT manual on its own — only actual user routes or
+	// rules (referencing the interface, or living in the instance's table when
+	// not steering) are. A hand-built policy scheme always has such routes, so
+	// this still detects it; but merely naming a table no longer collapses the
+	// panel into the hands-off view, so the table can be used for steered mode.
+	let manual = user_routes > 0;
 
 	return {
 		mode: manual ? 'manual' : (s.auto_routing ? 'auto' : (steering ? 'steered' : 'none')),

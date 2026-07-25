@@ -133,6 +133,10 @@ jobs:
           cp -r "$GITHUB_WORKSPACE/nordvpn-wireguard" package/nordvpn-wireguard
           rm -rf feeds/luci/applications/luci-app-nordvpn
           cp -r "$GITHUB_WORKSPACE/luci-app-nordvpn" feeds/luci/applications/luci-app-nordvpn
+          # Reindex the luci feed (-i, no fetch) so the just-copied app is
+          # registered; feeds install reads the index, so without this the
+          # compile target does not exist.
+          ./scripts/feeds update -i luci
           ./scripts/feeds install luci-base luci-app-nordvpn
           make defconfig
           make package/nordvpn-wireguard/compile package/luci-app-nordvpn/compile V=s

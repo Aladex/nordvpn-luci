@@ -282,9 +282,27 @@ country share one public key — so a bad endpoint still brings the interface
 "up" without error. Both **apply** and **rotation** therefore verify each
 candidate by waiting up to `verify_timeout` seconds for an actual **WireGuard
 handshake** (`wg show latest-handshakes`), not by pinging through the tunnel.
-Rotation tries up to `max_retries` shuffled candidates (excluding the current
-gateway) and restores the last working peer if none handshake; apply behaves
-the same way for automatic selections.
+Rotation only ever moves to a **different** server: the current gateway is
+excluded from the candidate set, so a rotation reported as successful has always
+changed the server. It tries up to `max_retries` shuffled candidates and, if none
+complete a handshake, restores the last working peer rather than leaving a dead
+tunnel. When the selection matches no server other than the current one, rotation
+is a no-op and keeps the working tunnel. Apply behaves the same way for automatic
+selections. (`max_retries` is a deliberate bound: a rotation worker must finish
+well within the lock's staleness window so the next scheduled tick cannot start a
+second, overlapping rotation.)
+
+### Rotation across hop modes
+
+Rotation is hop-mode aware — it only considers servers of the instance's own
+kind. A **Multihop** instance rotates among Double VPN servers with the same
+**exit** country (the entry country may change between rotations); an **Onion
+over VPN** instance rotates among onion servers only; single-hop never mixes in
+either. Because the Double VPN and Onion pools are far smaller than the
+single-hop pool, a country — or a pinned city — may expose only one server of
+that kind, in which case there is nothing to rotate to and the current tunnel is
+kept. Onion over VPN exists in only a handful of countries at all, so pairing it
+with a country that has none leaves rotation with no candidates.
 
 ### Server-list cache
 

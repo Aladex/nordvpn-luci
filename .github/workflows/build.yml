@@ -8,6 +8,11 @@ on:
     branches: [master]
   workflow_dispatch:
 
+# Cancel superseded runs on the same branch/tag; keep distinct tags independent.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   static:
     name: Static checks (shell / JSON / whitespace)
@@ -92,23 +97,45 @@ jobs:
           echo "SDK=$SDK"
           curl -fSL -o sdk.tar.zst "$BASE/$SDK"
           tar -I zstd -xf sdk.tar.zst
+          echo "SDK=$SDK" >> "$GITHUB_ENV"
           echo "SDKDIR=${SDK%.tar.zst}" >> "$GITHUB_ENV"
-      - name: Build the backend package
+
+      # Downloaded source tarballs are content-addressed and snapshot-agnostic:
+      # reuse them across snapshot bumps via the prefix restore-key.
+      - name: Cache downloaded sources (dl)
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.SDKDIR }}/dl
+          key: openwrt-dl-${{ env.SDK }}
+          restore-keys: |
+            openwrt-dl-
+
+      # Toolchain/host state is tied to the exact snapshot — exact key only, so a
+      # snapshot bump starts clean instead of mixing incompatible toolchains.
+      - name: Cache build state (feeds, staging_dir, build_dir)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.SDKDIR }}/feeds
+            ${{ env.SDKDIR }}/staging_dir
+            ${{ env.SDKDIR }}/build_dir
+            ${{ env.SDKDIR }}/tmp
+          key: openwrt-build-${{ env.SDK }}
+
+      - name: Build both packages
         run: |
-          cp -r nordvpn-wireguard "$SDKDIR/package/nordvpn-wireguard"
           cd "$SDKDIR"
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          # Only the feeds we actually build against (luci for the app; the
+          # backend lives in package/ and needs no feed). Avoids updating and
+          # installing every feed.
+          ./scripts/feeds update packages luci
+          rm -rf package/nordvpn-wireguard
+          cp -r "$GITHUB_WORKSPACE/nordvpn-wireguard" package/nordvpn-wireguard
+          rm -rf feeds/luci/applications/luci-app-nordvpn
+          cp -r "$GITHUB_WORKSPACE/luci-app-nordvpn" feeds/luci/applications/luci-app-nordvpn
+          ./scripts/feeds install luci-base luci-app-nordvpn
           make defconfig
-          make package/nordvpn-wireguard/compile V=s
-      - name: Build the LuCI app
-        run: |
-          cp -r luci-app-nordvpn "$SDKDIR/feeds/luci/applications/luci-app-nordvpn"
-          cd "$SDKDIR"
-          ./scripts/feeds update -i luci
-          ./scripts/feeds install luci-app-nordvpn
-          make defconfig
-          make package/luci-app-nordvpn/compile V=s
+          make package/nordvpn-wireguard/compile package/luci-app-nordvpn/compile V=s
       - uses: actions/upload-artifact@v4
         with:
           name: nordvpn-packages

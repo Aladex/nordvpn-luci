@@ -1,5 +1,7 @@
 # NordVPN WireGuard for OpenWrt
 
+**English** · [Русский](README.ru.md) · [Deutsch](README.de.md)
+
 Configure NordVPN's WireGuard (NordLynx) service on OpenWrt, with a one-time
 credential exchange, country/city/server selection (including Double VPN and
 Onion over VPN), automatic rotation, multiple parallel VPN instances,

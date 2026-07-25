@@ -346,9 +346,12 @@ Das **Traffic-Routing**-Panel entscheidet, wie der Traffic den Tunnel erreicht.
 Bei jedem apply *erkennt* das Backend zunächst das aktuelle Schema:
 
 - **Manuell** — es existieren ungestempelte Routen/Regeln, die das
-  VPN-Interface referenzieren, oder eine Routing-Tabelle ist ohne Steuerung
-  konfiguriert. Das Paket berührt dann niemals Routing oder Firewall; das Panel
-  ist rein informativ (mit einer IPv6-Leck-Warnung, wenn das WAN IPv6 hat).
+  VPN-Interface referenzieren (oder in der Routing-Tabelle der Instanz liegen).
+  Das Paket berührt dann niemals Routing oder Firewall; das Panel ist rein
+  informativ (mit einer IPv6-Leck-Warnung, wenn das WAN IPv6 hat). Eine
+  Routing-Tabelle allein ist **nicht** manuell — hake für sie ein **Steered
+  network** (gesteuertes Netz) an, um sie zu nutzen, oder füge eigene
+  Policy-Regeln hinzu.
 
   ![Manuelles Routing erkannt](docs/screenshots/routing-manual.png)
 
@@ -388,7 +391,10 @@ Lua-App behalten `auto_routing '0'`.
 
 Setze **Routing-Tabelle** (Advanced), um VPN-Traffic durch eine separate Tabelle
 zu leiten (`ip4table`/`ip6table` auf dem Interface), und füge dann Regeln unter
-**Network → Routing → Policy Routing** hinzu.
+**Network → Routing → Policy Routing** hinzu. Das Panel wechselt zu *Manuell*,
+sobald diese Regeln existieren; eine Tabelle ohne Regeln und ohne gesteuertes
+Netz bleibt im Modus *none* (das Paket tut nichts) statt manuell, sodass die
+Routing-Bedienelemente sichtbar bleiben.
 
 ## Sicherheit
 

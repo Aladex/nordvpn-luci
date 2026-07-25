@@ -324,10 +324,11 @@ serialized with a lock, and a failed refresh keeps the previous good cache.
 The **Traffic routing** panel decides how traffic reaches the tunnel.
 On every apply the backend first *detects* the current scheme:
 
-- **Manual** — unstamped routes/rules referencing the VPN interface exist, or
-  a routing table is configured without steering. The package then never
-  touches routing or firewall; the panel is purely informational (with an
-  IPv6-leak warning when the WAN has IPv6).
+- **Manual** — unstamped routes/rules referencing the VPN interface (or living
+  in the instance's routing table) exist. The package then never touches
+  routing or firewall; the panel is purely informational (with an IPv6-leak
+  warning when the WAN has IPv6). A routing table on its own is **not** manual —
+  tick it a **Steered network** to use it, or add your own policy rules.
 
   ![Manual routing detected](docs/screenshots/routing-manual.png)
 
@@ -364,7 +365,10 @@ modified. Upgrades from the legacy Lua app keep `auto_routing '0'`.
 
 Set **Routing table** (Advanced) to route VPN traffic through a separate table
 (`ip4table`/`ip6table` on the interface), then add rules under
-**Network → Routing → Policy Routing**.
+**Network → Routing → Policy Routing**. The panel switches to *Manual* once
+those rules exist; a table with no rules and no steered network is left in
+*none* mode (the app does nothing) rather than manual, so the routing controls
+stay visible.
 
 ## Security
 

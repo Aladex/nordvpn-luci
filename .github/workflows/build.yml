@@ -86,33 +86,50 @@ jobs:
 
   build-backend:
     name: Build packages (snapshot SDK, apk)
-    runs-on: ubuntu-latest
+    # Owner pushes/tags build on the self-hosted NAS runner (warm on-disk SDK,
+    # no queue); untrusted fork PRs stay on GitHub-hosted runners.
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted","nordvpn-build"]') }}
     steps:
       - uses: actions/checkout@v4
-      - name: Download the current x86/64 snapshot SDK
+
+      - name: Prepare host tools and the SDK working dir
         run: |
-          sudo apt-get update && sudo apt-get install -y zstd
+          sudo apt-get update
+          sudo apt-get install -y zstd build-essential clang flex bison g++ gawk \
+            gettext git libncurses-dev libssl-dev python3 python3-setuptools \
+            rsync unzip zlib1g-dev file wget jq curl ca-certificates \
+            gcc-multilib g++-multilib
+          # Persistent cache dir on the self-hosted runner (mounted volume);
+          # the ephemeral workspace on GitHub-hosted runners.
+          if [ -d /sdkcache ] && [ -w /sdkcache ]; then ROOT=/sdkcache; else ROOT="$GITHUB_WORKSPACE/.sdk"; mkdir -p "$ROOT"; fi
           BASE=https://downloads.openwrt.org/snapshots/targets/x86/64
           SDK=$(curl -sSL "$BASE/sha256sums" | grep -o 'openwrt-sdk-[^ ]*x86-64[^ ]*\.tar\.zst' | head -1)
-          echo "SDK=$SDK"
-          curl -fSL -o sdk.tar.zst "$BASE/$SDK"
-          tar -I zstd -xf sdk.tar.zst
+          SDKDIR="$ROOT/${SDK%.tar.zst}"
           echo "SDK=$SDK" >> "$GITHUB_ENV"
-          echo "SDKDIR=${SDK%.tar.zst}" >> "$GITHUB_ENV"
+          echo "SDKDIR=$SDKDIR" >> "$GITHUB_ENV"
+          if [ -x "$SDKDIR/scripts/feeds" ]; then
+            echo "Reusing warm SDK: $SDKDIR"
+          else
+            echo "Fetching SDK: $SDK"
+            curl -fSL -o "$ROOT/sdk.tar.zst" "$BASE/$SDK"
+            tar -I zstd -xf "$ROOT/sdk.tar.zst" -C "$ROOT"
+            rm -f "$ROOT/sdk.tar.zst"
+          fi
 
-      # Downloaded source tarballs are content-addressed and snapshot-agnostic:
-      # reuse them across snapshot bumps via the prefix restore-key.
+      # GitHub-hosted (fork PRs) has no warm disk — fall back to the Actions
+      # cache. Skipped on the self-hosted runner, whose /sdkcache persists.
+      # dl/ is content-addressed (prefix restore-key survives snapshot bumps);
+      # toolchain state is exact-key only so a bump never mixes toolchains.
       - name: Cache downloaded sources (dl)
+        if: ${{ github.event_name == 'pull_request' }}
         uses: actions/cache@v4
         with:
           path: ${{ env.SDKDIR }}/dl
           key: openwrt-dl-${{ env.SDK }}
           restore-keys: |
             openwrt-dl-
-
-      # Toolchain/host state is tied to the exact snapshot — exact key only, so a
-      # snapshot bump starts clean instead of mixing incompatible toolchains.
       - name: Cache build state (feeds, staging_dir, build_dir)
+        if: ${{ github.event_name == 'pull_request' }}
         uses: actions/cache@v4
         with:
           path: |
@@ -125,9 +142,11 @@ jobs:
       - name: Build both packages
         run: |
           cd "$SDKDIR"
+          # Drop any package built by a previous run so the artifact glob only
+          # picks up freshly built .apk files (warm SDK keeps old ones around).
+          rm -f bin/packages/*/*/*nordvpn*.apk 2>/dev/null || true
           # Install every feed: luci-app-nordvpn pulls luci-base -> lucihttp,
           # whose Lua binding needs headers a narrowed install does not provide.
-          # The cache (not feed narrowing) is where the real time saving is.
           ./scripts/feeds update -a
           rm -rf package/nordvpn-wireguard
           cp -r "$GITHUB_WORKSPACE/nordvpn-wireguard" package/nordvpn-wireguard

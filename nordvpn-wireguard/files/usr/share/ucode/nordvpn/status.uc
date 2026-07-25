@@ -55,6 +55,12 @@ function status(uci, instance) {
 	let result = {
 		instance: s.name,
 		configured: has_key,
+		// Administrative master switch, distinct from the runtime state: a
+		// disabled instance is deliberately down, not merely disconnected. The UI
+		// keys button visibility (Enable vs Reconnect/Disable) on this.
+		enabled: s.enabled,
+		// A pinned server disables rotation, so the UI hides "Rotate now".
+		fixed: (s.fixed_server && s.fixed_server != '') ? true : false,
 		state: has_key ? 'disconnected' : 'not_configured',
 		interface: iface,
 		location: {

@@ -106,6 +106,14 @@ write_cache(cache, cpath);
 	global.MOCK_UCI = { nordvpn: { main: { '.type': 'settings', interface: 'nordvpn' } }, network: {} };
 	global.MOCK_UBUS = {};
 	eq('status not_configured', status(cursor()).state, 'not_configured');
+	eq('status exposes enabled flag (default off)', status(cursor()).enabled, false);
+	eq('status exposes fixed flag (default off)', status(cursor()).fixed, false);
+
+	// Administrative flags surface for the UI's button gating.
+	global.MOCK_UCI = { nordvpn: { main: { '.type': 'settings', interface: 'nordvpn',
+		enabled: '1', fixed_server: 'ee70.nordvpn.com' } }, network: {} };
+	eq('status reflects enabled=1', status(cursor()).enabled, true);
+	eq('status reflects a pinned server', status(cursor()).fixed, true);
 
 	global.MOCK_UCI = { nordvpn: { main: { '.type': 'settings', interface: 'nordvpn' } },
 		network: { nordvpn: { '.type': 'interface', private_key: KEY } } };
@@ -263,6 +271,20 @@ write_cache(cache, cpath);
 	// Turning automatic mode off restores the pristine configuration.
 	res = enforce_routing(uci, mks({ auto_routing: false }));
 	eq('routing: off restores pristine config', sprintf('%J', global.MOCK_UCI), pristine);
+
+	// DNS override: the vpn_dns enum drives the resolver, and switching modes
+	// re-applies (the stamp records the mode, not a bare flag).
+	global.MOCK_UCI = { network: mknet(), firewall: mkfw() };
+	uci = cursor();
+	enforce_routing(uci, mks({ auto_routing: true, vpn_dns: 'standard' }));
+	eq('dns: standard pair applied', global.MOCK_UCI.network.nordvpn.dns, [ '103.86.96.100', '103.86.99.100' ]);
+	eq('dns: stamp records the mode', global.MOCK_UCI.network.nordvpn.nordvpn_managed_dns, 'standard');
+	enforce_routing(uci, mks({ auto_routing: true, vpn_dns: 'threat' }));
+	eq('dns: switch re-applies threat pair', global.MOCK_UCI.network.nordvpn.dns, [ '103.86.96.96', '103.86.99.99' ]);
+	eq('dns: stamp updated to threat', global.MOCK_UCI.network.nordvpn.nordvpn_managed_dns, 'threat');
+	enforce_routing(uci, mks({ auto_routing: true, vpn_dns: 'off' }));
+	eq('dns: off removes the override', global.MOCK_UCI.network.nordvpn.dns, null);
+	eq('dns: off clears the stamp', global.MOCK_UCI.network.nordvpn.nordvpn_managed_dns, null);
 }
 
 // 8b. source-network steering: lookup/prohibit rules, reconciliation, teardown

@@ -182,7 +182,7 @@ config instance 'main'
 	list source_network 'media'      # or: steer only these networks (see below)
 	option killswitch '0'            # block steered traffic while VPN is down
 	option block_ipv6 '1'            # block direct IPv6 (leak prevention)
-	option use_vpn_dns '0'           # push NordVPN resolvers while connected
+	option vpn_dns 'off'             # off | standard | threat (NordVPN resolvers)
 	option cache_dir ''              # empty = /tmp, shared by all instances
 	option cache_refresh_interval '21600'   # seconds, background refresh
 ```
@@ -218,7 +218,11 @@ ubus call nordvpn refresh_locations # start an async server-list refresh
 `status` distinguishes *configured* from *connected*: `connected` requires a
 WireGuard handshake fresher than 3 minutes, `degraded` means the interface is
 up but the handshake went stale, and `rotation.next_run` is the epoch of the
-next scheduled rotation (`null` when rotation cannot run).
+next scheduled rotation (`null` when rotation cannot run). It also reports the
+administrative `enabled` flag (a disabled instance is deliberately down, not
+merely disconnected) and `fixed` (a server is pinned, so rotation is off); the
+LuCI page keys its action buttons on both — showing a single Enable/Disable
+toggle and hiding "Rotate now" for a pinned tunnel.
 
 ### Multiple VPN instances
 
@@ -333,8 +337,11 @@ On every apply the backend first *detects* the current scheme:
   and a forwarding from the LAN zone. Optional toggles add a **kill switch**
   (a REJECT rule LAN→WAN, so LAN clients get no internet while the VPN is
   down), an **IPv6 block** (family-ipv6 REJECT LAN→WAN, on by default —
-  NordLynx is IPv4-only inside, so direct IPv6 would bypass the tunnel), and
-  **NordVPN DNS** on the interface.
+  NordLynx is IPv4-only inside, so direct IPv6 would bypass the tunnel), and a
+  **DNS override** on the interface: `standard` pushes NordVPN's plain resolver
+  (103.86.96.100 / 99.100), `threat` pushes NordVPN Threat Protection
+  (103.86.96.96 / 99.99, blocking ads and malware at the DNS level). Both only
+  resolve through the tunnel; `off` keeps the system/WAN resolver.
 
 - **Steered** — specific networks are ticked under *Steered networks*
   (`list source_network`). Only their traffic is policy-routed into the

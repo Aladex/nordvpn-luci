@@ -111,7 +111,7 @@ return view.extend({
 		var rows = [];
 
 		(this.instances || []).forEach(L.bind(function(st) {
-			var info = this.stateInfo(st.state || 'not_configured');
+			var info = this.stateInfo(this.dispState(st));
 			var loc = st.location || {};
 			var flag = this.countryFlag(loc.country);
 			var selected = (st.instance === this.instance);
@@ -258,10 +258,19 @@ return view.extend({
 			connecting:     { label: _('Connecting'),     color: 'var(--warning-color,#b8860b)' },
 			degraded:       { label: _('Degraded'),       color: 'var(--warning-color,#b8860b)' },
 			disconnected:   { label: _('Disconnected'),   color: 'var(--error-color,#c0392b)' },
+			disabled:       { label: _('Disabled'),       color: 'var(--text-color-medium,#666)' },
 			error:          { label: _('Error'),          color: 'var(--error-color,#c0392b)' },
 			not_configured: { label: _('Not configured'), color: 'var(--text-color-medium,#666)' }
 		};
 		return map[state] || { label: _('Unknown'), color: 'var(--text-color-medium,#666)' };
+	},
+
+	// Runtime state to display: an administratively disabled but configured
+	// instance reads as "Disabled" (deliberate), not "Disconnected" (a fault).
+	dispState: function(s) {
+		if (s && s.configured && s.enabled === false)
+			return 'disabled';
+		return (s && s.state) || 'not_configured';
 	},
 
 	fmtHandshake: function(sec) {
@@ -290,10 +299,50 @@ return view.extend({
 		return [ country, city ];
 	},
 
+	// Action buttons for the status band, chosen by state so structurally
+	// inapplicable actions are hidden (not greyed): only Refresh until
+	// configured, a single Enable/Disable toggle by administrative state, and
+	// "Rotate now" only for a live, non-pinned tunnel (greyed while not live).
+	actionButtons: function(s) {
+		var btns = [ E('button', { class: 'cbi-button', click: L.bind(this.refreshStatus, this) }, _('Refresh')) ];
+
+		if (!s.configured)
+			return btns;
+
+		if (s.enabled === false) {
+			btns.push(E('button', {
+				class: 'cbi-button cbi-button-apply',
+				click: L.bind(this.reconnect, this)
+			}, _('Enable')));
+			return btns;
+		}
+
+		btns.push(E('button', {
+			class: 'cbi-button cbi-button-apply',
+			click: L.bind(this.reconnect, this)
+		}, _('Reconnect')));
+
+		if (!s.fixed) {
+			var live = (s.state === 'connected' || s.state === 'degraded');
+			btns.push(E('button', {
+				class: 'cbi-button',
+				disabled: !live || null,
+				click: L.bind(this.rotateNow, this)
+			}, _('Rotate now')));
+		}
+
+		btns.push(E('button', {
+			class: 'cbi-button cbi-button-remove',
+			click: L.bind(this.disconnect, this)
+		}, _('Disable')));
+
+		return btns;
+	},
+
 	updateStatusBand: function() {
 		var s = this.status || {};
 		var loc = s.location || {};
-		var info = this.stateInfo(s.state || 'not_configured');
+		var info = this.stateInfo(this.dispState(s));
 
 		var locText = this.locationNames(loc.country, loc.city).filter(Boolean).join(' / ');
 		if (s.gateway)
@@ -334,24 +383,7 @@ return view.extend({
 						E('span', {}, locText || '')
 					]),
 					E('div', { class: 'nv-status-details' }, details.join(' · ')),
-					E('div', { class: 'nv-status-actions' }, [
-						E('button', { class: 'cbi-button', click: L.bind(this.refreshStatus, this) }, _('Refresh')),
-						E('button', {
-							class: 'cbi-button cbi-button-apply',
-							disabled: !s.configured || null,
-							click: L.bind(this.reconnect, this)
-						}, s.state === 'disconnected' ? _('Enable') : _('Reconnect')),
-						E('button', {
-							class: 'cbi-button',
-							disabled: (!s.configured || (s.rotation && s.rotation.enabled !== true)) || null,
-							click: L.bind(this.rotateNow, this)
-						}, _('Rotate now')),
-						E('button', {
-							class: 'cbi-button cbi-button-remove',
-							disabled: (!s.configured || s.state === 'disconnected' || s.state === 'not_configured') || null,
-							click: L.bind(this.disconnect, this)
-						}, _('Disable'))
-					])
+					E('div', { class: 'nv-status-actions' }, this.actionButtons(s))
 				])
 			])
 		]));
@@ -554,8 +586,16 @@ return view.extend({
 			this.ksBox.checked = (g('killswitch', '0') === '1');
 			this.v6Box = E('input', { type: 'checkbox', change: L.bind(this.onRoutingToggle, this) });
 			this.v6Box.checked = (g('block_ipv6', '1') === '1');
-			this.dnsBox = E('input', { type: 'checkbox', change: L.bind(this.markDirty, this) });
-			this.dnsBox.checked = (g('use_vpn_dns', '0') === '1');
+			// DNS mode: prefer the enum, fall back to the legacy boolean.
+			var dnsMode = g('vpn_dns', '');
+			if (dnsMode !== 'off' && dnsMode !== 'standard' && dnsMode !== 'threat')
+				dnsMode = (g('use_vpn_dns', '0') === '1') ? 'standard' : 'off';
+			this.dnsSel = E('select', { class: 'cbi-input-select', change: L.bind(this.markDirty, this) }, [
+				E('option', { value: 'off' }, _('Off — use system DNS')),
+				E('option', { value: 'standard' }, _('NordVPN — standard')),
+				E('option', { value: 'threat' }, _('NordVPN Threat Protection — blocks ads & malware'))
+			]);
+			this.dnsSel.value = dnsMode;
 			this.v6Warn = E('div', { class: 'cbi-value-description nv-inline-note hidden' },
 				_('⚠ IPv6 stays outside the tunnel and can leak your address.'));
 
@@ -584,9 +624,8 @@ return view.extend({
 				E('label', { class: 'nv-check' }, [ this.v6Box, _('Block direct IPv6 to prevent leaks') ]),
 				this.v6Warn
 			]);
-			this.dnsRow = this.row(_('DNS'), [
-				E('label', { class: 'nv-check' }, [ this.dnsBox, _('Use NordVPN DNS (103.86.96.100) while connected') ])
-			]);
+			this.dnsRow = this.row(_('DNS'), [ this.dnsSel ],
+				_('Which resolver to use while connected. Threat Protection blocks ads and malware at the DNS level; both NordVPN options only work through the tunnel.'));
 			body.appendChild(this.ksRow);
 			body.appendChild(this.v6Row);
 			body.appendChild(this.dnsRow);
@@ -977,7 +1016,9 @@ return view.extend({
 			uci.set('nordvpn', inst, 'auto_routing', autoOn ? '1' : '0');
 			uci.set('nordvpn', inst, 'killswitch', (this.ksBox && this.ksBox.checked) ? '1' : '0');
 			uci.set('nordvpn', inst, 'block_ipv6', (this.v6Box && this.v6Box.checked) ? '1' : '0');
-			uci.set('nordvpn', inst, 'use_vpn_dns', (this.dnsBox && this.dnsBox.checked) ? '1' : '0');
+			uci.set('nordvpn', inst, 'vpn_dns', (this.dnsSel && this.dnsSel.value) || 'off');
+			// Drop the legacy boolean so it cannot contradict the enum.
+			uci.unset('nordvpn', inst, 'use_vpn_dns');
 			if (steered.length) {
 				uci.set('nordvpn', inst, 'source_network', steered);
 				// Steering needs a routing table; default to the interface name.

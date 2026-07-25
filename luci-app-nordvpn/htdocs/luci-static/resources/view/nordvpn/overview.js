@@ -768,10 +768,16 @@ return view.extend({
 		// MTU with a WAN-derived recommendation (backend computes WAN_MTU - 80).
 		var rtx = (this.status || {}).routing || {};
 		var recMtu = rtx.recommended_mtu;
+		var curMtu = g('mtu', '');
+		var atRec = recMtu && curMtu !== '' && parseInt(curMtu, 10) === recMtu;
 		var mtuInput = this.input('mtu', 'number', g('mtu', ''),
 			{ min: 1280, max: 1500, style: 'width:90px', placeholder: recMtu ? ('' + recMtu) : '1420' });
 		var mtuCtl = [ mtuInput ];
-		if (recMtu) {
+		if (atRec) {
+			mtuCtl.push(' ');
+			mtuCtl.push(E('span', { style: 'color:var(--success-color-medium,#3c8c3c);font-weight:600' },
+				_('✓ recommended value')));
+		} else if (recMtu) {
 			mtuCtl.push(' ');
 			mtuCtl.push(E('button', { class: 'cbi-button', click: L.bind(function(ev) {
 				ev.preventDefault();
@@ -779,9 +785,11 @@ return view.extend({
 				this.markDirty();
 			}, this) }, _('Use recommended')));
 		}
-		var mtuDesc = recMtu
-			? _('Recommended %d for your WAN (MTU %d). Empty = the default (1420). Lower it if sites/Gmail hang or throughput is poor — LTE/5G often need less.').format(recMtu, rtx.wan_mtu || 0)
-			: _('WireGuard interface MTU. Empty = the netifd default (1420).');
+		var mtuDesc = atRec
+			? _('You are on the recommended MTU for your WAN (MTU %d). Empty = the netifd default (1420).').format(rtx.wan_mtu || 0)
+			: (recMtu
+				? _('Recommended %d for your WAN (MTU %d). Empty = the default (1420). Lower it if sites/Gmail hang or throughput is poor — LTE/5G often need less.').format(recMtu, rtx.wan_mtu || 0)
+				: _('WireGuard interface MTU. Empty = the netifd default (1420).'));
 
 		var body = E('div', { class: 'cbi-section-node' }, [
 			this.row(_('Interface name'), [ this.input('interface', 'text', g('interface', 'nordvpn')) ],

@@ -432,6 +432,12 @@ function wan_l3_mtu(uci) {
 	for (let ifc in ((data ? data.interface : null) || [])) {
 		if (!ifc.up || !ifc.l3_device || !wannets[ifc.interface])
 			continue;
+		// Never count a WireGuard tunnel as the WAN uplink: it is the path
+		// WireGuard's UDP rides ON, not the uplink itself. Counting it creates
+		// a feedback loop — setting the recommended tunnel MTU makes the tunnel
+		// the smallest "WAN" device, dragging the next recommendation down 80.
+		if (ifc.proto == 'wireguard')
+			continue;
 		let l = run([ 'ip', 'link', 'show', 'dev', ifc.l3_device ]);
 		if (l.code != 0)
 			continue;

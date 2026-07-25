@@ -1,5 +1,5 @@
 #!/usr/bin/ucode -S
-// SPDX-License-Identifier: 0BSD
+// SPDX-License-Identifier: MIT
 // Foreground scheduler daemon supervised by procd. Refreshes the server-list
 // cache and triggers rotation on schedule, running each job in a short-lived
 // child (uloop.task) so a slow job never stalls the loop. Overlap is prevented

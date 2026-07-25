@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: 0BSD
+# SPDX-License-Identifier: MIT
 # Copyright 2026 Andrey Aleksandrov <aladex@gmail.com>
 
 include $(TOPDIR)/rules.mk
@@ -7,7 +7,7 @@ PKG_NAME:=nordvpn-wireguard
 PKG_VERSION:=1.1.1
 PKG_RELEASE:=1
 PKG_MAINTAINER:=Andrey Aleksandrov <aladex@gmail.com>
-PKG_LICENSE:=0BSD
+PKG_LICENSE:=MIT
 
 include $(INCLUDE_DIR)/package.mk
 

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: 0BSD
+// SPDX-License-Identifier: MIT
 // Minimal in-memory 'uci' module mock for offline ucode tests. Mirrors the real
 // ucode uci cursor API used by the backend. Seed and inspect via global.MOCK_UCI:
 //   global.MOCK_UCI = { network: { nordvpn: { '.type':'interface', proto:'wireguard' } } };

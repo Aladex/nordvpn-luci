@@ -423,4 +423,4 @@ and a snapshot-SDK build of the backend. See `.github/workflows/build.yml`.
 
 ## License
 
-[0BSD](LICENSE) — do whatever you want with it.
+[MIT](LICENSE) — do whatever you want with it, just keep the copyright notice.

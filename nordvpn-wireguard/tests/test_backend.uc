@@ -1,5 +1,5 @@
 #!/usr/bin/ucode -S
-// SPDX-License-Identifier: 0BSD
+// SPDX-License-Identifier: MIT
 // Offline tests for credential handling, selection, apply and status.
 // Uses the mock 'uci'/'ubus' modules (forced ahead on the module search path).
 // Globals `fixture` and `KEY` are supplied by run.sh.

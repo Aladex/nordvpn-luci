@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: 0BSD
+// SPDX-License-Identifier: MIT
 // Shared server selection over the normalized cache. Pure and testable; used by
 // both the apply path (single pick) and the rotation worker (try many).
 

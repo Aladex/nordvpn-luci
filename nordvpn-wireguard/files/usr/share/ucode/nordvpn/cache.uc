@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: 0BSD
+// SPDX-License-Identifier: MIT
 // Server-list cache/API module for nordvpn-wireguard. Handles NordVPN API
 // pagination, server normalization (country/city/relay), multihop
 // classification, atomic cache writes, a single-writer lock and a schema

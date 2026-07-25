@@ -1,5 +1,5 @@
 #!/bin/sh
-# SPDX-License-Identifier: 0BSD
+# SPDX-License-Identifier: MIT
 # One-time, idempotent migration from the legacy Lua luci-app-nordvpn into the
 # dedicated /etc/config/nordvpn owned by nordvpn-wireguard. Safe to run more
 # than once; it never disconnects a working tunnel.

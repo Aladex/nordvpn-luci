@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: 0BSD
+// SPDX-License-Identifier: MIT
 // Credential storage and transactional WireGuard apply. Shared by the rpcd
 // `apply`/`set_credentials` methods and the procd reload path.
 

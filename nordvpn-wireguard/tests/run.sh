@@ -1,5 +1,5 @@
 #!/bin/sh
-# SPDX-License-Identifier: 0BSD
+# SPDX-License-Identifier: MIT
 # Offline ucode unit/fixture tests for nordvpn-wireguard. No network or account.
 # Requires ucode + ucode-mod-fs + ucode-mod-math. 'uci'/'ubus' are mocked and
 # forced ahead of the real modules on the search path, so no device is needed.

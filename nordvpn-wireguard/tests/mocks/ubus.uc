@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: 0BSD
+// SPDX-License-Identifier: MIT
 // Minimal 'ubus' module mock for offline ucode tests. Seed responses keyed by
 // "<object>~<method>" via global.MOCK_UBUS:
 //   global.MOCK_UBUS = { 'network.interface.nordvpn~status': { up: true, l3_device: 'nordvpn' } };

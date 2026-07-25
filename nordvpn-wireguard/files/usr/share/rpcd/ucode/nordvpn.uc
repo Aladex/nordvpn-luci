@@ -1,5 +1,5 @@
 #!/usr/bin/env ucode
-// SPDX-License-Identifier: 0BSD
+// SPDX-License-Identifier: MIT
 // rpcd ubus object 'nordvpn'. Thin glue over the backend modules with a fixed
 // request schema per method. Read methods never mutate; write methods delegate
 // to the shared apply/rotation workers. No secret is ever returned.

@@ -1,5 +1,5 @@
 #!/usr/bin/ucode -S
-// SPDX-License-Identifier: 0BSD
+// SPDX-License-Identifier: MIT
 // Offline fixture test for the cache normalizer. No network or account needed.
 // Run via tests/run.sh (passes the fixture path as the `fixture` global).
 

@@ -1,5 +1,5 @@
 #!/usr/bin/ucode -S
-// SPDX-License-Identifier: 0BSD
+// SPDX-License-Identifier: MIT
 // Integration test for the rpcd ubus object. loadfile()s the object and calls
 // its methods against the mock uci/ubus and a fixture-built cache. Globals
 // `RPCD`, `fixture` and `KEY` are supplied by run.sh.

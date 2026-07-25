@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: 0BSD
+// SPDX-License-Identifier: MIT
 // Shared helpers for the nordvpn-wireguard backend: constants, strict input
 // validation, /etc/config/nordvpn loading, logging with credential redaction,
 // and injection-safe filesystem/process helpers.

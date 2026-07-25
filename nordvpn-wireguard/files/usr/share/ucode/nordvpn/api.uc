@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: 0BSD
+// SPDX-License-Identifier: MIT
 // NordVPN credential exchange. The access token is handed to curl only through
 // an anonymous pipe (curl --config on /proc/self/fd/<r>), never via argv, an
 // environment variable, a named temp file, or any log line.

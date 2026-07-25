@@ -455,4 +455,4 @@ die ucode-Tests und einen Snapshot-SDK-Build des Backends. Siehe
 
 ## Lizenz
 
-[0BSD](LICENSE) — mach damit, was du willst.
+[MIT](LICENSE) — mach damit, was du willst, behalte nur den Copyright-Hinweis.

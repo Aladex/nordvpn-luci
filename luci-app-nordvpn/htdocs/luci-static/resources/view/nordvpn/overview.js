@@ -6,7 +6,7 @@
 'require poll';
 'require dom';
 
-/* SPDX-License-Identifier: 0BSD
+/* SPDX-License-Identifier: MIT
  * NordVPN WireGuard management view. Talks to the backend 'nordvpn' ubus object
  * (nordvpn-wireguard); performs no direct privileged filesystem or network ops.
  */

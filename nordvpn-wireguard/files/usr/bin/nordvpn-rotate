@@ -1,5 +1,5 @@
 #!/usr/bin/ucode -S
-// SPDX-License-Identifier: 0BSD
+// SPDX-License-Identifier: MIT
 // One-shot NordVPN rotation worker. Invoked by the nordvpn procd service and
 // safe to run manually. Reads the schedule/selection from /etc/config/nordvpn.
 

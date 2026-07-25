@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: 0BSD
+// SPDX-License-Identifier: MIT
 // ESLint flat config for this repo's CI. Mirrors the subset of openwrt/luci's
 // eslint.config.mjs relevant to a LuCI JS view: js/recommended + the LuCI
 // runtime globals, script sourceType with global return. When the luci-app is

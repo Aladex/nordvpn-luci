@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: 0BSD
+// SPDX-License-Identifier: MIT
 // Pure scheduling decisions for the nordvpn procd daemon. Kept separate from
 // the uloop event loop so the timing logic can be unit-tested offline.
 

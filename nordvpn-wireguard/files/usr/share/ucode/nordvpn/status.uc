@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: 0BSD
+// SPDX-License-Identifier: MIT
 // Runtime status for the UI/RPC. Combines UCI config, netifd (ubus) interface
 // state and the WireGuard handshake age. Never returns any secret.
 

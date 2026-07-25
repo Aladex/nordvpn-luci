@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: 0BSD
+// SPDX-License-Identifier: MIT
 // One-shot rotation worker. Builds the candidate set once, tries servers
 // without replacement, binds the connectivity test to the tunnel, and restores
 // the previously working peer if every candidate fails. Overlapping runs are

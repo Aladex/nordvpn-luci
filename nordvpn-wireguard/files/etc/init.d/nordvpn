@@ -1,5 +1,5 @@
 #!/bin/sh /etc/rc.common
-# SPDX-License-Identifier: 0BSD
+# SPDX-License-Identifier: MIT
 # Consolidated NordVPN service: one procd-supervised ucode daemon that refreshes
 # the server-list cache and runs scheduled rotation. The daemon reads
 # /etc/config/nordvpn and re-reads it on every tick; the reload trigger restarts

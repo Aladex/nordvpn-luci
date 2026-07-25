@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: 0BSD
+// SPDX-License-Identifier: MIT
 // Traffic-routing detection and enforcement. Detects whether the user manages
 // routing themselves (custom routing table or static routes/rules referencing
 // the VPN interface) and, only when automatic routing is enabled AND no manual

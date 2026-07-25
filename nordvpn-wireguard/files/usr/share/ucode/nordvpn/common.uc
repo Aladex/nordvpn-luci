@@ -109,6 +109,13 @@ function validate_hop_mode(m) {
 	return (m == 'single' || m == 'multihop' || m == 'onion') ? m : null;
 }
 
+// DNS override mode while connected: 'off' (system/WAN resolver), 'standard'
+// (NordVPN's plain resolver) or 'threat' (NordVPN Threat Protection, blocks
+// ads and malware). null for anything else so the caller can fall back.
+function validate_dns_mode(m) {
+	return (m == 'off' || m == 'standard' || m == 'threat') ? m : null;
+}
+
 // Classify a relay from the normalized cache: 'multihop' (Double VPN),
 // 'onion' (Onion Over VPN) or 'single'. Falls back to the hostname pattern so
 // caches written before the onion flag existed still classify correctly.
@@ -259,7 +266,18 @@ function load_settings(uci, instance) {
 		auto_routing: g('auto_routing', '0') == '1',
 		killswitch: g('killswitch', '0') == '1',
 		block_ipv6: g('block_ipv6', '1') == '1',
-		use_vpn_dns: g('use_vpn_dns', '0') == '1',
+		// DNS override mode. Prefer the enum; fall back to the legacy boolean
+		// (use_vpn_dns=1 meant the standard resolver) so upgraded configs keep
+		// working before the migration/save rewrites the key. use_vpn_dns stays
+		// as a derived boolean for the enforce condition and any other consumer.
+		vpn_dns: (function() {
+			let m = validate_dns_mode(g('vpn_dns', ''));
+			if (m)
+				return m;
+			return (g('use_vpn_dns', '0') == '1') ? 'standard' : 'off';
+		})(),
+		use_vpn_dns: validate_dns_mode(g('vpn_dns', '')) ?
+			(g('vpn_dns', '') != 'off') : (g('use_vpn_dns', '0') == '1'),
 		cache_dir: gs('cache_dir', ''),
 		cache_refresh_interval: (function() {
 			let v = bounded_int(gs('cache_refresh_interval', '21600'), MIN_CACHE_REFRESH, MAX_CACHE_REFRESH);
@@ -390,7 +408,7 @@ return {
 	MIN_ROTATION_INTERVAL, MAX_ROTATION_INTERVAL, MIN_CACHE_REFRESH, MAX_CACHE_REFRESH,
 	MIN_VERIFY_TIMEOUT, MAX_VERIFY_TIMEOUT,
 	bounded_int, validate_interface, validate_token, validate_wg_key, validate_hostname,
-	validate_port, validate_hop_mode, relay_kind, validate_rotation_mode, validate_interval, validate_time,
+	validate_port, validate_hop_mode, validate_dns_mode, relay_kind, validate_rotation_mode, validate_interval, validate_time,
 	validate_country_code, validate_location_code, validate_instance, validate_routing_table, validate_dir,
 	load_settings, list_instances, globals_section, cache_file_path, iso_ts, redact, log,
 	atomic_write, acquire_lock, release_lock, sh_quote, open_cmd, run

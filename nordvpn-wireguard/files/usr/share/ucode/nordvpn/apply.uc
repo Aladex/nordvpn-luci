@@ -425,6 +425,7 @@ function delete_instance(uci, name) {
 	s.auto_routing = false;
 	s.killswitch = false;
 	s.block_ipv6 = false;
+	s.vpn_dns = 'off';
 	s.use_vpn_dns = false;
 	s.source_networks = [];
 	let routing = enforce_routing(uci, s);

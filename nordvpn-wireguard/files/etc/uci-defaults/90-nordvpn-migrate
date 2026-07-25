@@ -99,6 +99,19 @@ fi
 uci -q delete "$pkg.main.ping_count"
 uci -q delete "$pkg.main.ping_timeout"
 
+# DNS override moved from the legacy boolean (use_vpn_dns) to the vpn_dns enum
+# (off/standard/threat). Convert every section once; the enum wins if present.
+_migrate_dns() {
+	[ -n "$(uci -q get "$pkg.$1.vpn_dns")" ] && return
+	local legacy
+	legacy="$(uci -q get "$pkg.$1.use_vpn_dns")"
+	[ -z "$legacy" ] && return
+	[ "$legacy" = '1' ] && uci set "$pkg.$1.vpn_dns=standard" || uci set "$pkg.$1.vpn_dns=off"
+	uci -q delete "$pkg.$1.use_vpn_dns"
+}
+config_load "$pkg"
+config_foreach _migrate_dns
+
 # The legacy Lua app kept its settings on the network interface section; the
 # new backend owns them in /etc/config/nordvpn. Drop the leftovers from the
 # managed interface (idempotent; the live tunnel is untouched).

@@ -16,7 +16,13 @@ const run = _common.run,
 
 const MARK = 'nordvpn_managed';
 const ROLE = 'nordvpn_role';
-const VPN_DNS = '103.86.96.100 103.86.99.100';
+// NordVPN DNS resolvers by mode. 'standard' is the plain resolver; 'threat' is
+// Threat Protection (blocks ads and malware at the DNS level). Both only work
+// reliably through the tunnel.
+const VPN_DNS = {
+	standard: '103.86.96.100 103.86.99.100',
+	threat:   '103.86.96.96 103.86.99.99'
+};
 const RT_TABLES = '/etc/iproute2/rt_tables';
 
 // ── Small uci helpers ────────────────────────────────────────────────
@@ -730,13 +736,18 @@ function enforce(uci, s) {
 		cf = true;
 	}
 
-	// 5. DNS override on the interface (stamped, netifd-managed lifecycle).
-	let want_dns = managed && s.use_vpn_dns;
-	if (want_dns && uci.get('network', iface, MARK + '_dns') != '1') {
-		uci.set('network', iface, 'dns', split(VPN_DNS, ' '));
-		uci.set('network', iface, MARK + '_dns', '1');
-		cn = true;
-	} else if (!want_dns && uci.get('network', iface, MARK + '_dns') == '1') {
+	// 5. DNS override on the interface (stamped, netifd-managed lifecycle). The
+	// stamp records the mode, so switching resolvers (standard <-> threat)
+	// re-applies instead of being skipped as "already set".
+	let mode = (managed && s.vpn_dns && s.vpn_dns != 'off') ? s.vpn_dns : null;
+	let stamped = uci.get('network', iface, MARK + '_dns');
+	if (mode && VPN_DNS[mode]) {
+		if (stamped != mode) {
+			uci.set('network', iface, 'dns', split(VPN_DNS[mode], ' '));
+			uci.set('network', iface, MARK + '_dns', mode);
+			cn = true;
+		}
+	} else if (stamped != null && stamped != '') {
 		uci.delete('network', iface, 'dns');
 		uci.delete('network', iface, MARK + '_dns');
 		cn = true;

@@ -36,8 +36,10 @@ config instance 'main'
 	# (kill switch) and block direct IPv6 so it cannot bypass the tunnel.
 	option killswitch '0'
 	option block_ipv6 '1'
-	# Push NordVPN's resolvers (103.86.96.100/99.100) while the tunnel is up.
-	option use_vpn_dns '0'
+	# DNS resolver while the tunnel is up: 'off' (system/WAN), 'standard'
+	# (NordVPN 103.86.96.100/99.100) or 'threat' (NordVPN Threat Protection
+	# 103.86.96.96/99.99, blocks ads and malware).
+	option vpn_dns 'off'
 	# Server-list cache directory (empty = /tmp) and background refresh period.
 	option cache_dir ''
 	option cache_refresh_interval '21600'

@@ -56,6 +56,14 @@ function shuffle(list) {
 	return a;
 }
 
+// Exclusion key for the currently connected server. The stamped nordvpn_gateway
+// is the intended key; fall back to endpoint_host so a peer written without the
+// stamp (hand-made, or a restored null-gateway snapshot) still cannot be
+// re-selected and reported as a rotation. Pure/testable.
+function current_key(saved) {
+	return saved ? (saved.gateway || saved.endpoint_host || null) : null;
+}
+
 // Ordered candidate list: matching relays, current gateway excluded, shuffled
 // and capped at `limit`. Pure/testable.
 function plan_candidates(cache, settings, current_gateway, limit) {
@@ -119,12 +127,19 @@ function rotate_inner(uci, instance) {
 
 	srand(time());
 	let saved = current_peer(uci, iface);
-	let current_gw = saved ? saved.gateway : null;
+	let current_gw = current_key(saved);
 	let plan = plan_candidates(cache, s, current_gw, s.max_retries);
 	if (length(plan) == 0)
-		return { error: 'no candidate servers for the current selection' };
+		// Only the current server matches the selection — nothing to rotate to.
+		// Keep the working tunnel; this is a no-op, not a failure.
+		return { skipped: true, reason: 'no other server for the current selection' };
 
 	for (let relay in plan) {
+		// Never rotate onto the current server: a successful rotation must change
+		// the gateway. plan_candidates already drops it; this guards the case
+		// where the exclusion key was unknown (unstamped peer).
+		if (current_gw && relay.hostname == current_gw)
+			continue;
 		if (!connect_one(uci, iface, relay, s))
 			continue;
 		// Verify the tunnel by its WireGuard handshake, not by a ping routed
@@ -137,7 +152,8 @@ function rotate_inner(uci, instance) {
 		}
 	}
 
-	// Every candidate failed — roll back to the last working peer.
+	// Every different candidate failed to handshake — keep a working tunnel by
+	// rolling back to the last working peer.
 	if (saved) {
 		restore_peer(uci, iface, saved);
 		uci.commit('network');
@@ -165,4 +181,4 @@ function rotate(uci, instance) {
 	return res;
 }
 
-return { shuffle, plan_candidates, read_state, record, last_attempt_ts, mark_attempt, rotate };
+return { shuffle, current_key, plan_candidates, read_state, record, last_attempt_ts, mark_attempt, rotate };

@@ -17,7 +17,8 @@ const _cmn = require('nordvpn.common');
 const load_settings = _cmn.load_settings, list_instances = _cmn.list_instances;
 const status = require('nordvpn.status').status;
 const _rotate = require('nordvpn.rotate');
-const shuffle = _rotate.shuffle, plan_candidates = _rotate.plan_candidates;
+const shuffle = _rotate.shuffle, plan_candidates = _rotate.plan_candidates,
+      current_key = _rotate.current_key;
 const _service = require('nordvpn.service');
 const should_refresh = _service.should_refresh, should_rotate = _service.should_rotate,
       next_rotation = _service.next_rotation;
@@ -124,8 +125,16 @@ write_cache(cache, cpath);
 	eq('shuffle preserves members', sum, 15);
 	eq('shuffle does not mutate input', length(arr), 5);
 
+	// current_key: prefer the stamped gateway, fall back to endpoint_host so an
+	// unstamped peer is still excluded and can never be re-reported as a rotation.
+	eq('current_key prefers gateway', current_key({ gateway: 'g', endpoint_host: 'e' }), 'g');
+	eq('current_key falls back to endpoint_host', current_key({ endpoint_host: 'e' }), 'e');
+	eq('current_key null when neither', current_key({}), null);
+	eq('current_key null when no peer', current_key(null), null);
+
 	let s_ee = { country_code: 'ee', city_code: '', hop_mode: 'single', max_retries: 10 };
 	eq('plan excludes current gateway', length(plan_candidates(cache, s_ee, 'ee70.nordvpn.com', 10)), 0);
+	eq('plan excludes via endpoint_host key', length(plan_candidates(cache, s_ee, current_key({ endpoint_host: 'ee70.nordvpn.com' }), 10)), 0);
 	eq('plan includes when not excluded', length(plan_candidates(cache, s_ee, null, 10)), 1);
 
 	let s_nl = { country_code: 'nl', city_code: '', hop_mode: 'multihop', max_retries: 10 };

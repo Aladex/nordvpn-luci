@@ -125,10 +125,10 @@ jobs:
       - name: Build both packages
         run: |
           cd "$SDKDIR"
-          # Only the feeds we actually build against (luci for the app; the
-          # backend lives in package/ and needs no feed). Avoids updating and
-          # installing every feed.
-          ./scripts/feeds update packages luci
+          # Install every feed: luci-app-nordvpn pulls luci-base -> lucihttp,
+          # whose Lua binding needs headers a narrowed install does not provide.
+          # The cache (not feed narrowing) is where the real time saving is.
+          ./scripts/feeds update -a
           rm -rf package/nordvpn-wireguard
           cp -r "$GITHUB_WORKSPACE/nordvpn-wireguard" package/nordvpn-wireguard
           rm -rf feeds/luci/applications/luci-app-nordvpn
@@ -137,7 +137,7 @@ jobs:
           # registered; feeds install reads the index, so without this the
           # compile target does not exist.
           ./scripts/feeds update -i luci
-          ./scripts/feeds install luci-base luci-app-nordvpn
+          ./scripts/feeds install -a
           make defconfig
           make package/nordvpn-wireguard/compile package/luci-app-nordvpn/compile V=s
       - uses: actions/upload-artifact@v4

@@ -13,7 +13,7 @@
 
 var callInstances = rpc.declare({ object: 'nordvpn', method: 'instances' });
 var callLocations = rpc.declare({ object: 'nordvpn', method: 'locations' });
-var callServers = rpc.declare({ object: 'nordvpn', method: 'servers', params: [ 'country', 'city', 'hop_mode' ] });
+var callServers = rpc.declare({ object: 'nordvpn', method: 'servers', params: [ 'locations', 'hop_mode' ] });
 var callRefreshStatus = rpc.declare({ object: 'nordvpn', method: 'refresh_status' });
 var callSetCredentials = rpc.declare({ object: 'nordvpn', method: 'set_credentials', params: [ 'token', 'instance' ] });
 var callApply = rpc.declare({ object: 'nordvpn', method: 'apply', params: [ 'instance' ] });
@@ -40,6 +40,49 @@ var STYLE = '' +
 	'.nv-seg button{border:0;background:transparent;margin:0;padding:.3em 1.1em;cursor:pointer;font:inherit;color:inherit;line-height:1.3;white-space:nowrap;flex:1 1 auto}' +
 	'.nv-seg button+button{border-left:1px solid #0069d6}' +
 	'.nv-seg button.active{background:#0069d6;color:#fff}' +
+	// Rotation pool chips: a country is filled (like the active segment), a
+	// Location chips: one filled pill per country, with borderless edit/remove
+	// buttons inside. A stale code (no longer in the server list) is dashed.
+	'.nv-pool{display:flex;flex-direction:column;align-items:flex-start;gap:.4em;margin-top:.45em}' +
+	'.nv-chip{display:inline-flex;align-items:center;gap:.35em;border:1px solid #0069d6;border-radius:1.2em;padding:.15em .55em;line-height:1.4;white-space:nowrap}' +
+	'.nv-chip-country{background:#0069d6;color:#fff}' +
+	'.nv-chip-click{cursor:pointer}' +
+	'.nv-chip-stale{border-style:dashed;color:var(--text-color-medium,#666)}' +
+	'.nv-chip button{border:0;background:transparent;color:inherit;cursor:pointer;padding:0 .1em;margin:0;font:inherit;font-weight:700;line-height:1}' +
+	'.nv-pool-count{color:var(--text-color-medium,#666);font-size:.9em}' +
+	// Custom location picker: the trigger opens an inline panel that walks
+	// countries -> cities (checkbox narrowing) in place. The trigger hides
+	// while the panel is open, so there is no duplicate "add" affordance.
+	'.nv-pool-wrap{display:block;margin-top:.5em}' +
+	'.nv-pool-trigger::after{content:" \\25be"}' +
+	'.nv-pool-panel{display:block;margin-top:.35em;width:320px;max-width:100%;max-height:340px;overflow:auto;background:var(--background-color-high,#fff);color:var(--text-color-high,inherit);border:1px solid var(--border-color-medium,#ccc);border-radius:.4em;box-shadow:0 4px 14px rgba(0,0,0,.18);padding:.25em}' +
+	'.nv-pool-panel.hidden{display:none}' +
+	'.nv-pool-head{display:flex;align-items:center;justify-content:space-between;gap:.5em;padding:.1em .3em .3em;font-weight:600}' +
+	'.nv-pool-x{border:0;background:transparent;cursor:pointer;font:inherit;font-weight:700;color:inherit;padding:0 .2em}' +
+	'.nv-pool-filter{width:100%;box-sizing:border-box;margin:0 0 .3em 0}' +
+	'.nv-pool-row{display:flex;align-items:center;gap:.55em;padding:.34em .5em;border-radius:.3em;cursor:pointer;white-space:nowrap}' +
+	'.nv-pool-row:hover{background:rgba(0,105,214,.14)}' +
+	'.nv-pool-row.is-in{opacity:.55}' +
+	'.nv-pool-row .grow{flex:1;overflow:hidden;text-overflow:ellipsis}' +
+	'.nv-pool-row .chev{color:var(--text-color-medium,#888);font-weight:700}' +
+	'.nv-pool-row .box{font-weight:700;width:1.15em;text-align:center;flex:none}' +
+	'.nv-pool-back{font-weight:600}' +
+	'.nv-pool-remove{color:#c0392b;font-weight:600}' +
+	'.nv-pool-remove:hover{background:rgba(192,57,43,.12)}' +
+	'.nv-pool-sep{border-top:1px solid var(--border-color-medium,#ddd);margin:.25em 0}' +
+	'.nv-chip-add{font-weight:700;padding:0 .15em}' +
+	// Server picker: same panel, plus a load dot (green/amber/red), a group
+	// header per country and quick "Automatic / Lowest load" rows at the top.
+	'.nv-srv-trigger{max-width:100%;overflow:hidden;text-overflow:ellipsis;text-align:left}' +
+	'.nv-srv-x{border:0;background:transparent;cursor:pointer;font:inherit;font-weight:700;color:inherit;padding:0 .2em;margin-left:.3em}' +
+	'.nv-dot{display:inline-block;width:.7em;height:.7em;border-radius:50%;flex:none}' +
+	'.nv-dot-lo{background:#3c8c3c}' +
+	'.nv-dot-mid{background:#c79100}' +
+	'.nv-dot-hi{background:#c0392b}' +
+	'.nv-srv-load{color:var(--text-color-medium,#888);font-variant-numeric:tabular-nums;flex:none}' +
+	'.nv-srv-cur{color:#3c8c3c;font-weight:600;flex:none}' +
+	'.nv-srv-grp{font-weight:600;padding:.35em .5em .15em;color:var(--text-color-medium,#888)}' +
+	'.nv-pool-row.nv-srv-quick{font-weight:600}' +
 	// Plain flex rows (no LuCI .table classes), so the theme's own responsive
 	// table stacking can never apply; wraps naturally down to ~340 px.
 	'.nv-inst-row{display:flex;align-items:center;gap:.8em;padding:.55em 0;border-bottom:1px solid var(--border-color-medium,#ccc);cursor:pointer}' +
@@ -525,9 +568,25 @@ return view.extend({
 			click: L.bind(this.showClearCredentialsModal, this)
 		}, _('Remove')) : '';
 
-		this.countrySel = E('select', { class: 'cbi-input-select', change: L.bind(this.onCountryChange, this) });
-		this.citySel = E('select', { class: 'cbi-input-select', change: L.bind(this.onCityChange, this), disabled: true });
-		this.serverSel = E('select', { class: 'cbi-input-select', change: L.bind(this.onServerChange, this), disabled: true });
+		// Server pin picker (custom panel, load-aware). _serverChosen is the
+		// source of truth: a hostname, or '' for automatic (rotation picks).
+		this._serversReq = 0;
+		this._serverChosen = '';
+		this._srvOpen = false;
+		this._srvFilter = '';
+		this.srvTrigger = E('button', { type: 'button', class: 'cbi-button nv-pool-trigger nv-srv-trigger',
+			click: L.bind(function(ev) { ev.preventDefault(); ev.stopPropagation(); this.srvTogglePanel(); }, this) },
+			_('Automatic server'));
+		this.srvPanel = E('div', { class: 'nv-pool-panel hidden',
+			click: function(ev) { ev.stopPropagation(); } });
+		this.srvWrap = E('span', { class: 'nv-pool-wrap' }, [ this.srvTrigger, this.srvPanel ]);
+		if (!this._srvOutsideBound) {
+			this._srvOutsideBound = true;
+			document.addEventListener('click', L.bind(function(ev) {
+				if (this._srvOpen && this.srvWrap && !this.srvWrap.contains(ev.target))
+					this.srvClosePanel();
+			}, this));
+		}
 
 		var hop = uci.get('nordvpn', this.instance, 'hop_mode') || 'single';
 		this.hopValue = (hop === 'multihop' || hop === 'onion') ? hop : 'single';
@@ -544,20 +603,76 @@ return view.extend({
 		this.hopNote = E('div', { class: 'cbi-value-description' });
 		this.updateHopButtons();
 
-		this.locNote = E('div', { class: 'cbi-value-description hidden' });
+		// Location set editor: a combined country/city picker feeding removable
+		// chips. The set drives BOTH the initial connect and the rotation. A
+		// legacy country_code/city_code selection seeds the chips so upgraded
+		// configs see their choice here. Codes no longer in the server list
+		// are kept and shown dashed, never silently dropped.
+		this.poolEntries = [];
+		var locRaw = uci.get('nordvpn', this.instance, 'locations');
+		if (typeof locRaw === 'string')
+			locRaw = [ locRaw ];
+		var seed = Array.isArray(locRaw) ? locRaw.slice() : [];
+		if (!seed.length) {
+			// A legacy city implies its country, so seed the city alone (not both)
+			// or the whole country when no city was pinned. Seeding both would
+			// double-count and render the city hidden under the country chip.
+			var legacyCity = uci.get('nordvpn', this.instance, 'city_code') || '';
+			var legacyCc = uci.get('nordvpn', this.instance, 'country_code') || '';
+			if (legacyCity)
+				seed.push(legacyCity);
+			else if (legacyCc)
+				seed.push(legacyCc);
+		}
+		seed.forEach(L.bind(function(code) {
+			var e = this.poolResolve(code);
+			if (e)
+				this.poolEntries.push(e);
+		}, this));
+		// Custom picker: a trigger opens a panel that walks countries -> cities
+		// in place, with an explicit "back" step. No native <select>, so the
+		// navigation and the reset-after-add feel like a small wizard.
+		this._poolOpen = false;
+		this._poolLevel = 'country';
+		this._poolCountry = null;
+		this._poolFilter = '';
+		this.poolTrigger = E('button', { type: 'button', class: 'cbi-button nv-pool-trigger',
+			click: L.bind(function(ev) { ev.preventDefault(); ev.stopPropagation(); this.poolTogglePanel(); }, this) },
+			'+ ' + _('Add a location'));
+		this.poolPanel = E('div', { class: 'nv-pool-panel hidden',
+			click: function(ev) { ev.stopPropagation(); } });
+		this.poolWrap = E('span', { class: 'nv-pool-wrap' }, [ this.poolTrigger, this.poolPanel ]);
+		// One document-level closer for the whole view (guarded so form rebuilds
+		// do not stack listeners); it reads the current poolWrap at click time.
+		if (!this._poolOutsideBound) {
+			this._poolOutsideBound = true;
+			document.addEventListener('click', L.bind(function(ev) {
+				if (this._poolOpen && this.poolWrap && !this.poolWrap.contains(ev.target))
+					this.poolClosePanel();
+			}, this));
+		}
+		this.poolChips = E('span', { class: 'nv-pool' });
+		this.poolCount = E('span', { class: 'nv-pool-count' });
+		this.poolNote = E('div', { class: 'cbi-value-description' });
+		this.rebuildPoolWidget();
 
 		var section = E('fieldset', { class: 'cbi-section' }, [
 			E('legend', {}, _('Connection')),
 			E('div', { class: 'cbi-section-node' }, [
 				this.row(_('Credentials'), [ E('div', { class: 'nv-inline' }, [ credState, credBtn, credClearBtn ]) ]),
 				this.row(_('Hop mode'), [ seg, this.hopNote ]),
-				this.row(_('Country'), [ this.countrySel, this.locNote ]),
-				this.row(_('City'), [ this.citySel ], _('Leave on Automatic to rotate within the country')),
-				this.row(_('Server'), [ this.serverSel ], _('Choosing a specific server disables automatic rotation'))
+				this.row(_('Locations'), [
+					E('div', {}, [ this.poolChips ]),
+					this.poolWrap,
+					this.poolNote
+				], _('Countries this instance connects between. Picking a country adds the whole country; open its chip to narrow it to specific cities. The initial connect and the rotation both pick within this set.')),
+				this.row(_('Server'), [
+					this.srvWrap
+				], _('Automatic picks a server from the set (rotation-friendly). Pin a specific one to lock it; pinning disables automatic rotation.'))
 			])
 		]);
 
-		this.populateCountries();
+		this.refreshServerList();
 		return section;
 	},
 
@@ -746,6 +861,366 @@ return view.extend({
 		return '%s (%s)'.format(d.toLocaleString(), rel);
 	},
 
+	/* ---- rotation pool -------------------------------------------------- */
+
+	// Resolve a pool code to display metadata against the current locations
+	// tree and hop mode. A code that is not in the tree (removed by NordVPN,
+	// or empty for the current hop mode) resolves with name/count null so the
+	// chip renders dashed instead of disappearing.
+	poolResolve: function(code) {
+		if (typeof code !== 'string' || !code)
+			return null;
+		var key = this.hopCountKey();
+		var isCountry = /^[A-Za-z]{2}$/.test(code);
+		var flag = this.countryFlag(code.slice(0, 2));
+		var countries = this.filteredCountries();
+		for (var i = 0; i < countries.length; i++) {
+			var c = countries[i];
+			if (isCountry && c.code === code)
+				return { code: code, kind: 'country', name: c.name, count: c.gateway_count || 0, flag: flag };
+			var cities = isCountry ? [] : (c.cities || []);
+			for (var j = 0; j < cities.length; j++)
+				if (cities[j].code === code)
+					return { code: code, kind: 'city', name: cities[j].name, count: cities[j][key] || 0, flag: flag };
+		}
+		return { code: code, kind: isCountry ? 'country' : 'city', name: null, count: null, flag: flag };
+	},
+
+	/* ---- country-first set mutations ---------------------------------- */
+
+	poolCitiesOf: function(cc) {
+		return (((this._ccData || {})[cc]) || {}).cities || [];
+	},
+
+	// Current state of a country in the set: whole, or a map of picked cities.
+	poolCountryHas: function(cc) {
+		var whole = false, cities = {};
+		(this.poolEntries || []).forEach(function(e) {
+			if (e.code === cc) whole = true;
+			else if (e.kind === 'city' && e.code.indexOf(cc + '-') === 0) cities[e.code] = true;
+		});
+		return { whole: whole, cities: cities, has: whole || Object.keys(cities).length > 0 };
+	},
+
+	poolStripCountry: function(cc) {
+		this.poolEntries = (this.poolEntries || []).filter(function(e) {
+			return !(e.code === cc || (e.kind === 'city' && e.code.indexOf(cc + '-') === 0));
+		});
+	},
+
+	_poolCommit: function() {
+		this.markDirty();
+		this.rebuildPoolWidget();
+		this.refreshServerList();
+	},
+
+	// Whole country in the set (stored as the bare country code).
+	poolSetWhole: function(cc) {
+		this.poolStripCountry(cc);
+		var e = this.poolResolve(cc);
+		if (e)
+			this.poolEntries.push(e);
+		this._poolCommit();
+	},
+
+	poolRemoveCountry: function(cc) {
+		this.poolStripCountry(cc);
+		this._poolCommit();
+	},
+
+	// Narrow a country to specific city codes. All cities selected collapses
+	// back to the whole country; none removes it entirely.
+	poolSetCities: function(cc, codes) {
+		var all = this.poolCitiesOf(cc).map(function(c) { return c.code; });
+		if (!codes.length)
+			return this.poolRemoveCountry(cc);
+		if (all.length && codes.length >= all.length)
+			return this.poolSetWhole(cc);
+		this.poolStripCountry(cc);
+		codes.forEach(L.bind(function(code) {
+			var e = this.poolResolve(code);
+			if (e)
+				this.poolEntries.push(e);
+		}, this));
+		this._poolCommit();
+	},
+
+	// Toggle one city. From a whole country, the first uncheck expands to
+	// "every city except this one".
+	poolToggleCity: function(cc, code) {
+		var st = this.poolCountryHas(cc);
+		var all = this.poolCitiesOf(cc).map(function(c) { return c.code; });
+		var sel;
+		if (st.whole) {
+			sel = all.filter(function(x) { return x !== code; });
+		} else {
+			sel = Object.keys(st.cities);
+			if (sel.indexOf(code) >= 0)
+				sel = sel.filter(function(x) { return x !== code; });
+			else
+				sel.push(code);
+		}
+		this.poolSetCities(cc, sel);
+	},
+
+	// The "whole country" master toggle.
+	poolToggleWhole: function(cc) {
+		if (this.poolCountryHas(cc).whole)
+			this.poolRemoveCountry(cc);
+		else
+			this.poolSetWhole(cc);
+	},
+
+	// Repaint the cascade picker, chips and the counter. Re-resolves entries,
+	// so it is also the hop-mode/locations change hook. Also maintains the
+	// country-code → name/data maps used by the cascade and server labels.
+	rebuildPoolWidget: function() {
+		if (!this.poolChips)
+			return;
+		this.poolEntries = (this.poolEntries || []).map(L.bind(function(e) {
+			return this.poolResolve(e.code);
+		}, this)).filter(function(e) { return e != null; });
+
+		this._ccNames = {};
+		this._ccData = {};
+		this.filteredCountries().forEach(L.bind(function(c) {
+			this._ccNames[c.code] = c.name;
+			this._ccData[c.code] = c;
+		}, this));
+		// Keep an open panel in sync with the set (✓ marks, counts, city lists).
+		if (this._poolOpen)
+			this.poolRenderPanel();
+
+		dom.content(this.poolChips, '');
+		// One chip per country (country-first model). A whole-country chip shows
+		// just the country; a narrowed one lists its picked cities. Remove drops
+		// the whole country; the pencil opens its city checklist.
+		// Entries not available in the current hop mode are hidden (shown as "not
+		// selected") rather than as broken raw codes; switching modes therefore
+		// reads as an empty set until valid locations are picked. They stay in
+		// poolEntries so a round-trip mode switch does not lose them, and are
+		// dropped from what gets saved (collectIntoUci filters the same way).
+		var groups = [], byCc = {};
+		this.poolEntries.forEach(function(e) {
+			if (e.count == null)
+				return;
+			var cc = e.kind === 'country' ? e.code : e.code.split('-')[0];
+			var g = byCc[cc];
+			if (!g) {
+				g = { cc: cc, flag: e.flag, whole: null, cities: [] };
+				byCc[cc] = g;
+				groups.push(g);
+			}
+			if (e.kind === 'country')
+				g.whole = e;
+			else
+				g.cities.push(e);
+		});
+
+		var total = 0;
+		groups.forEach(function(g) {
+			if (g.whole) {
+				if (g.whole.count != null) total += g.whole.count;
+			} else {
+				g.cities.forEach(function(e) { if (e.count != null) total += e.count; });
+			}
+		});
+
+		groups.forEach(L.bind(function(g) {
+			var cname = this._ccNames[g.cc] || (g.whole && g.whole.name) || g.cc.toUpperCase();
+			var flag = g.flag || '';
+			var label, stale;
+			if (g.whole) {
+				stale = g.whole.name == null;
+				label = (flag ? flag + ' ' : '') + cname +
+					(g.whole.count != null ? ' (%d)'.format(g.whole.count) : '');
+			} else {
+				stale = g.cities.some(function(e) { return e.name == null; });
+				var cities = g.cities.map(function(e) { return e.name || e.code; }).join(', ');
+				label = (flag ? flag + ' ' : '') + cname + ' · ' + cities;
+			}
+			// The whole chip opens this country's editor (cities + remove); no
+			// separate ×/pencil buttons.
+			this.poolChips.appendChild(E('span', {
+				class: 'nv-chip nv-chip-country nv-chip-click' + (stale ? ' nv-chip-stale' : ''),
+				title: _('Edit or remove'),
+				click: L.bind(function(ev) { ev.stopPropagation(); this.poolOpenCountry(g.cc, true); }, this) },
+				label));
+		}, this));
+
+		var summary = '';
+		if (groups.length)
+			summary = total ? _('set: %d countries, ~%d servers').format(groups.length, total)
+				: _('set: %d countries').format(groups.length);
+		this.poolChips.appendChild(this.poolCount);
+		dom.content(this.poolCount, summary);
+
+		// Guidance: the server list drives the picker, and the set must not be
+		// empty — the connection picks within it.
+		var note = '';
+		if (!(this.locations || {}).available)
+			note = _('Loading server list… use "Refresh server list" in Advanced settings if it does not appear.');
+		else if (!groups.length)
+			note = _('Add at least one country or city.');
+		dom.content(this.poolNote, note);
+		this.poolNote.classList.toggle('hidden', !note);
+		if (this.poolTrigger)
+			this.poolTrigger.disabled = !(this.locations || {}).available;
+	},
+
+	/* ---- location picker panel --------------------------------------- */
+
+	poolTogglePanel: function() {
+		if (this._poolOpen)
+			return this.poolClosePanel();
+		this._poolLevel = 'country';
+		this._poolCountry = null;
+		this._poolFilter = '';
+		this._poolOpen = true;
+		if (this.poolTrigger) this.poolTrigger.classList.add('hidden');
+		this.poolPanel.classList.remove('hidden');
+		this.poolRenderPanel();
+	},
+
+	poolClosePanel: function() {
+		this._poolOpen = false;
+		if (this.poolPanel) this.poolPanel.classList.add('hidden');
+		if (this.poolTrigger) this.poolTrigger.classList.remove('hidden');
+	},
+
+	// Open a country's city checklist. Entering a country selects it whole
+	// ("pick a country = whole country in the set"); checkboxes then narrow it.
+	// edit=true means we came from a chip (editing that country): no "back to
+	// countries", but a "remove this country" action instead. edit=false is the
+	// add flow from the country list (keeps a back step).
+	poolOpenCountry: function(cc, edit) {
+		if (!this.poolCountryHas(cc).has)
+			this.poolSetWhole(cc);
+		this._poolLevel = 'city';
+		this._poolCountry = cc;
+		this._poolEdit = !!edit;
+		this._poolFilter = '';
+		this._poolOpen = true;
+		if (this.poolTrigger) this.poolTrigger.classList.add('hidden');
+		this.poolPanel.classList.remove('hidden');
+		this.poolRenderPanel();
+	},
+
+	// City level: a back row, a "Whole country" master toggle, then a checkbox
+	// per city. Country level: a header with close, a filter, the country list.
+	poolRenderPanel: function() {
+		var panel = this.poolPanel;
+		if (!panel)
+			return;
+		dom.content(panel, '');
+
+		if (this._poolLevel === 'city') {
+			var cc = this._poolCountry;
+			var c = (this._ccData || {})[cc];
+			if (this._poolEdit) {
+				var cflag = this.countryFlag(cc);
+				panel.appendChild(E('div', { class: 'nv-pool-head' }, [
+					E('span', {}, (cflag ? cflag + ' ' : '') + (this._ccNames[cc] || cc.toUpperCase())),
+					E('button', { type: 'button', class: 'nv-pool-x', title: _('Done'),
+						click: L.bind(function(ev) { ev.stopPropagation(); this.poolClosePanel(); }, this) }, '✕')
+				]));
+			} else {
+				panel.appendChild(E('div', { class: 'nv-pool-head' }, [
+					E('span', { class: 'nv-pool-back', style: 'cursor:pointer',
+						click: L.bind(function(ev) {
+							ev.stopPropagation();
+							this._poolLevel = 'country';
+							this._poolCountry = null;
+							this._poolFilter = '';
+							this.poolRenderPanel();
+						}, this) }, '‹ ' + _('Back to countries')),
+					E('button', { type: 'button', class: 'nv-pool-x', title: _('Close'),
+						click: L.bind(function(ev) { ev.stopPropagation(); this.poolClosePanel(); }, this) }, '✕')
+				]));
+			}
+			panel.appendChild(E('div', { class: 'nv-pool-sep' }));
+			if (!c) {
+				panel.appendChild(E('div', { class: 'nv-pool-row is-in' }, _('No cities available')));
+				return;
+			}
+			var st = this.poolCountryHas(cc);
+			panel.appendChild(E('div', { class: 'nv-pool-row',
+				click: L.bind(function(ev) { ev.stopPropagation(); this.poolToggleWhole(cc); }, this) }, [
+					E('span', { class: 'box' }, st.whole ? '☑' : '☐'),
+					E('span', { class: 'grow' }, _('Whole country (%d)').format(c.gateway_count || 0))
+				]));
+			panel.appendChild(E('div', { class: 'nv-pool-sep' }));
+			var key = this.hopCountKey();
+			(c.cities || []).forEach(L.bind(function(city) {
+				var on = st.whole || !!st.cities[city.code];
+				panel.appendChild(E('div', { class: 'nv-pool-row',
+					click: L.bind(function(ev) { ev.stopPropagation(); this.poolToggleCity(cc, city.code); }, this) }, [
+						E('span', { class: 'box' }, on ? '☑' : '☐'),
+						E('span', { class: 'grow' }, '%s (%d)'.format(city.name, city[key] || 0))
+					]));
+			}, this));
+			if (this._poolEdit) {
+				panel.appendChild(E('div', { class: 'nv-pool-sep' }));
+				panel.appendChild(E('div', { class: 'nv-pool-row nv-pool-remove',
+					click: L.bind(function(ev) {
+						ev.stopPropagation();
+						this.poolRemoveCountry(cc);
+						this.poolClosePanel();
+					}, this) }, [
+						E('span', { class: 'box' }, '🗑'),
+						E('span', { class: 'grow' }, _('Remove this country'))
+					]));
+			}
+			return;
+		}
+
+		panel.appendChild(E('div', { class: 'nv-pool-head' }, [
+			E('span', {}, _('Add a location')),
+			E('button', { type: 'button', class: 'nv-pool-x', title: _('Close'),
+				click: L.bind(function(ev) { ev.stopPropagation(); this.poolClosePanel(); }, this) }, '✕')
+		]));
+		var filt = E('input', { type: 'text', class: 'cbi-input-text nv-pool-filter',
+			placeholder: _('Filter') + '…', value: this._poolFilter });
+		filt.addEventListener('input', L.bind(function() {
+			this._poolFilter = filt.value;
+			this.poolRenderCountryList();
+		}, this));
+		filt.addEventListener('click', function(ev) { ev.stopPropagation(); });
+		panel.appendChild(filt);
+		this._poolListEl = E('div', {});
+		panel.appendChild(this._poolListEl);
+		this.poolRenderCountryList();
+		setTimeout(function() { try { filt.focus(); } catch (e) {} }, 0);
+	},
+
+	// Country rows, filtered. Mark: whole = check, partial = half, none = blank.
+	// Clicking a row opens that country (adding it whole, then narrow-able).
+	poolRenderCountryList: function() {
+		var el = this._poolListEl;
+		if (!el)
+			return;
+		dom.content(el, '');
+		var f = (this._poolFilter || '').toLowerCase();
+		var any = false;
+		this.filteredCountries().forEach(L.bind(function(c) {
+			if (f && c.name.toLowerCase().indexOf(f) < 0 && c.code.toLowerCase().indexOf(f) < 0)
+				return;
+			any = true;
+			var st = this.poolCountryHas(c.code);
+			var mark = st.whole ? '☑' : (st.has ? '◐' : '');
+			var flag = this.countryFlag(c.code);
+			el.appendChild(E('div', { class: 'nv-pool-row' + (st.has ? ' is-in' : ''),
+				click: L.bind(function(ev) { ev.stopPropagation(); this.poolOpenCountry(c.code); }, this) }, [
+					E('span', { class: 'box' }, mark),
+					E('span', { class: 'grow' }, (flag ? flag + ' ' : '') +
+						'%s (%d)'.format(c.name, c.gateway_count || 0)),
+					E('span', { class: 'chev' }, '›')
+				]));
+		}, this));
+		if (!any)
+			el.appendChild(E('div', { class: 'nv-pool-row is-in' }, _('No matches')));
+	},
+
 	// "hr" -> 🇭🇷 via regional-indicator codepoints. Returns '' for anything
 	// that is not two ASCII letters, so malformed codes fall back to the
 	// plain name.
@@ -813,7 +1288,7 @@ return view.extend({
 
 		// The connection section is built (and may restore a pinned server)
 		// before this row exists — sync the initial visibility.
-		if (this.serverSel && this.serverSel.value)
+		if (this._serverChosen)
 			this.maxRetriesRow.classList.add('hidden');
 
 		return E('details', { class: 'nv-advanced cbi-section' }, [
@@ -900,96 +1375,221 @@ return view.extend({
 		return out;
 	},
 
-	populateCountries: function() {
-		var sel = this.countrySel;
-		if (!sel)
+	// Fetch the union server list for the location set (ubus `servers` with the
+	// locations argument) and repaint the picker. A pinned server no longer in
+	// the set is kept, never dropped.
+	refreshServerList: function() {
+		if (!this.srvTrigger)
 			return;
-		var chosen = uci.get('nordvpn', this.instance, 'country_code') || '';
-		dom.content(sel, E('option', { value: '' }, _('-- Select country --')));
-
-		var countries = this.filteredCountries();
-		if (!this.locations.available) {
-			this.locNote.classList.remove('hidden');
-			dom.content(this.locNote, _('Loading server list… use "Refresh server list" in Advanced settings if it does not appear.'));
-			sel.disabled = true;
-		} else {
-			this.locNote.classList.add('hidden');
-			sel.disabled = false;
-		}
-		this._countryData = {};
-		countries.forEach(L.bind(function(c) {
-			this._countryData[c.code] = c;
-			var flag = this.countryFlag(c.code);
-			sel.appendChild(E('option', { value: c.code, selected: (c.code === chosen) || null },
-				(flag ? flag + ' ' : '') + '%s (%d)'.format(c.name, c.gateway_count || 0)));
-		}, this));
-
-		this.onCountryChange();
-	},
-
-	onCountryChange: function() {
-		this.markDirty();
-		var code = this.countrySel.value;
-		var c = this._countryData ? this._countryData[code] : null;
-		var chosenCity = uci.get('nordvpn', this.instance, 'city_code') || '';
-
-		dom.content(this.citySel, E('option', { value: '' }, _('Automatic city')));
-		dom.content(this.serverSel, E('option', { value: '' }, _('Automatic server')));
-		this.citySel.disabled = !c;
-		this.serverSel.disabled = true;
-		this._cityData = {};
-
-		if (c) {
-			var key = this.hopCountKey();
-			(c.cities || []).forEach(L.bind(function(city) {
-				this._cityData[city.code] = city;
-				this.citySel.appendChild(E('option', { value: city.code, selected: (city.code === chosenCity) || null },
-					'%s (%d)'.format(city.name, city[key] || 0)));
-			}, this));
-		}
-		this.onCityChange();
-	},
-
-	onCityChange: function() {
-		this.markDirty();
-		var city = this._cityData ? this._cityData[this.citySel.value] : null;
-
-		dom.content(this.serverSel, E('option', { value: '' }, _('Automatic server')));
-		this.serverSel.disabled = !city;
-		this.onServerChange();
-		if (!city)
+		var codes = (this.poolEntries || []).map(function(e) { return e.code; });
+		var req = ++this._serversReq;
+		this._serverData = null;
+		this.srvTrigger.disabled = !codes.length;
+		if (!codes.length) {
+			this.srvRenderTrigger();
 			return;
-
-		var cc = this.countrySel.value;
-		var chosenServer = uci.get('nordvpn', this.instance, 'fixed_server') || '';
-		callServers(cc, city.code, this.hopMode()).then(L.bind(function(res) {
-			var relays = (res && res.relays) || [];
-			relays.forEach(function(r) {
-				var label = '%s (%s%%)'.format(r.name || r.hostname, r.load != null ? r.load : '?');
-				this.serverSel.appendChild(E('option', { value: r.hostname, selected: (r.hostname === chosenServer) || null }, label));
-			}, this);
-			if (chosenServer) {
-				// Restoring the persisted choice is not a user edit.
-				this._building = true;
-				this.onServerChange();
-				this._building = false;
-			}
+		}
+		callServers(codes, this.hopMode()).then(L.bind(function(res) {
+			if (req !== this._serversReq)
+				return; // a newer rebuild superseded this response
+			this._serverData = { relays: ((res && res.relays) || []).slice() };
+			// Restoring the persisted pin is not a user edit.
+			this._serverChosen = uci.get('nordvpn', this.instance, 'fixed_server') || '';
+			this.srvRenderTrigger();
+			if (this._srvOpen)
+				this.srvRenderPanel();
+			this._building = true;
+			this.updateRotationAvailability();
+			this._building = false;
 		}, this)).catch(function() {});
 	},
 
-	onServerChange: function() {
+	srvLoadClass: function(load) {
+		if (typeof load !== 'number')
+			return '';
+		return load < 50 ? 'nv-dot-lo' : (load < 80 ? 'nv-dot-mid' : 'nv-dot-hi');
+	},
+
+	// The gateway the tunnel is on right now (live status), to flag it.
+	srvCurrentGateway: function() {
+		return (this.status && this.status.gateway) || '';
+	},
+
+	srvRelayByHost: function(host) {
+		var found = null;
+		((this._serverData && this._serverData.relays) || []).forEach(function(r) {
+			if (r.hostname === host) found = r;
+		});
+		return found;
+	},
+
+	srvLowestLoad: function() {
+		var best = null;
+		((this._serverData && this._serverData.relays) || []).forEach(function(r) {
+			if (typeof r.load !== 'number') return;
+			if (!best || r.load < best.load) best = r;
+		});
+		return best;
+	},
+
+	// The trigger shows the current pin richly (load dot / flag / city / name),
+	// or "Automatic server", with an inline clear when pinned.
+	srvRenderTrigger: function() {
+		var t = this.srvTrigger;
+		if (!t)
+			return;
+		var host = this._serverChosen;
+		if (!host) {
+			dom.content(t, _('Automatic server'));
+			return;
+		}
+		var r = this.srvRelayByHost(host);
+		var names = this._ccNames || {};
+		var kids;
+		if (r) {
+			var flag = this.countryFlag(r.country_code);
+			kids = [
+				E('span', { class: 'nv-dot ' + this.srvLoadClass(r.load) }),
+				E('span', {}, ' ' + (flag ? flag + ' ' : '') +
+					'%s / %s'.format(r.city || '?', r.name || r.hostname) +
+					(r.load != null ? ' (%d%%)'.format(r.load) : ''))
+			];
+		} else {
+			kids = [ E('span', {}, host + ' ' + _('(not in the set)')) ];
+		}
+		kids.push(E('button', { type: 'button', class: 'nv-srv-x', title: _('Clear (back to automatic)'),
+			click: L.bind(function(ev) { ev.preventDefault(); ev.stopPropagation(); this.srvSetChosen(''); }, this) }, '×'));
+		dom.content(t, kids);
+	},
+
+	srvTogglePanel: function() {
+		if (this._srvOpen)
+			return this.srvClosePanel();
+		this._srvFilter = '';
+		this._srvOpen = true;
+		if (this.srvTrigger) this.srvTrigger.classList.add('hidden');
+		this.srvPanel.classList.remove('hidden');
+		this.srvRenderPanel();
+	},
+
+	srvClosePanel: function() {
+		this._srvOpen = false;
+		if (this.srvPanel) this.srvPanel.classList.add('hidden');
+		if (this.srvTrigger) this.srvTrigger.classList.remove('hidden');
+	},
+
+	srvSetChosen: function(host) {
+		this._serverChosen = host || '';
 		this.markDirty();
 		this.updateRotationAvailability();
+		this.srvRenderTrigger();
+		this.srvClosePanel();
+	},
+
+	// Panel: header + filter, quick "Automatic" and "Lowest load" rows, then
+	// servers grouped by country and sorted by load (lowest first).
+	srvRenderPanel: function() {
+		var panel = this.srvPanel;
+		if (!panel)
+			return;
+		dom.content(panel, '');
+		panel.appendChild(E('div', { class: 'nv-pool-head' }, [
+			E('span', {}, _('Pick a server')),
+			E('button', { type: 'button', class: 'nv-pool-x', title: _('Close'),
+				click: L.bind(function(ev) { ev.stopPropagation(); this.srvClosePanel(); }, this) }, '✕')
+		]));
+		var filt = E('input', { type: 'text', class: 'cbi-input-text nv-pool-filter',
+			placeholder: _('Filter servers') + '…', value: this._srvFilter });
+		filt.addEventListener('input', L.bind(function() {
+			this._srvFilter = filt.value;
+			this.srvRenderList();
+		}, this));
+		filt.addEventListener('click', function(ev) { ev.stopPropagation(); });
+		panel.appendChild(filt);
+		this._srvListEl = E('div', {});
+		panel.appendChild(this._srvListEl);
+		this.srvRenderList();
+		setTimeout(function() { try { filt.focus(); } catch (e) {} }, 0);
+	},
+
+	srvRenderList: function() {
+		var el = this._srvListEl;
+		if (!el)
+			return;
+		dom.content(el, '');
+		var names = this._ccNames || {};
+		var chosen = this._serverChosen;
+		var current = this.srvCurrentGateway();
+		var f = (this._srvFilter || '').toLowerCase();
+
+		el.appendChild(E('div', { class: 'nv-pool-row nv-srv-quick',
+			click: L.bind(function(ev) { ev.stopPropagation(); this.srvSetChosen(''); }, this) }, [
+				E('span', { class: 'box' }, chosen ? '' : '☑'),
+				E('span', { class: 'grow' }, _('Automatic (rotation picks)'))
+			]));
+		var best = this.srvLowestLoad();
+		if (best) {
+			var bn = names[best.country_code] || (best.country_code || '').toUpperCase();
+			el.appendChild(E('div', { class: 'nv-pool-row nv-srv-quick',
+				click: L.bind(function(ev) { ev.stopPropagation(); this.srvSetChosen(best.hostname); }, this) }, [
+					E('span', { class: 'box' }, '⚡'),
+					E('span', { class: 'grow' }, _('Lowest load') + ' · ' + (best.city || bn) +
+						(best.load != null ? ' (%d%%)'.format(best.load) : '')),
+					E('span', { class: 'nv-dot ' + this.srvLoadClass(best.load) })
+				]));
+		}
+		el.appendChild(E('div', { class: 'nv-pool-sep' }));
+
+		var groups = [], byCode = {};
+		((this._serverData && this._serverData.relays) || []).forEach(L.bind(function(r) {
+			var cname = names[r.country_code] || (r.country_code || '').toUpperCase();
+			var hay = (cname + ' / ' + (r.city || '') + ' / ' + (r.name || r.hostname)).toLowerCase();
+			if (f && r.hostname !== chosen && hay.indexOf(f) < 0)
+				return;
+			var g = byCode[r.country_code];
+			if (!g) {
+				g = { name: cname, flag: this.countryFlag(r.country_code), rows: [] };
+				byCode[r.country_code] = g;
+				groups.push(g);
+			}
+			g.rows.push(r);
+		}, this));
+		groups.forEach(L.bind(function(g) {
+			g.rows.sort(function(a, b) {
+				var al = typeof a.load === 'number' ? a.load : 999;
+				var bl = typeof b.load === 'number' ? b.load : 999;
+				return al - bl;
+			});
+			el.appendChild(E('div', { class: 'nv-srv-grp' }, (g.flag ? g.flag + ' ' : '') +
+				'%s (%d)'.format(g.name, g.rows.length)));
+			g.rows.forEach(L.bind(function(r) {
+				var isCur = current && r.hostname === current;
+				var isPin = r.hostname === chosen;
+				el.appendChild(E('div', { class: 'nv-pool-row' + (isPin ? ' is-in' : ''),
+					click: L.bind(function(ev) { ev.stopPropagation(); this.srvSetChosen(r.hostname); }, this) }, [
+						E('span', { class: 'nv-dot ' + this.srvLoadClass(r.load) }),
+						E('span', { class: 'grow' }, '%s / %s'.format(r.city || '?', r.name || r.hostname)),
+						isCur ? E('span', { class: 'nv-srv-cur' }, '● ' + _('current')) : '',
+						E('span', { class: 'nv-srv-load' }, r.load != null ? '%d%%'.format(r.load) : '')
+					]));
+			}, this));
+		}, this));
+
+		if (chosen && !this.srvRelayByHost(chosen))
+			el.appendChild(E('div', { class: 'nv-pool-row is-in' }, chosen + ' ' + _('(not in the set)')));
+		else if (!groups.length)
+			el.appendChild(E('div', { class: 'nv-pool-row is-in' }, _('No matches')));
 	},
 
 	onHopChange: function() {
 		this.markDirty();
 		this.updateHopButtons();
-		this.populateCountries();
+		this.rebuildPoolWidget();
+		this.refreshServerList();
 	},
 
 	updateRotationAvailability: function() {
-		var fixed = this.serverSel && this.serverSel.value;
+		var fixed = this._serverChosen;
 		if (this.rotEnable) {
 			this.rotEnable.disabled = !!fixed;
 			if (fixed)
@@ -1005,7 +1605,7 @@ return view.extend({
 
 	onRotationToggle: function() {
 		this.markDirty();
-		var on = this.rotEnable && this.rotEnable.checked && !(this.serverSel && this.serverSel.value);
+		var on = this.rotEnable && this.rotEnable.checked && !this._serverChosen;
 		var timeMode = this.rotModeTime && this.rotModeTime.checked;
 		if (this.rotModeRow) this.rotModeRow.classList.toggle('hidden', !on);
 		if (this.rotIntervalRow) this.rotIntervalRow.classList.toggle('hidden', !on || timeMode);
@@ -1049,10 +1649,18 @@ return view.extend({
 			setv('cache_dir', (this.refs.cache_dir.value || '').trim(), 'main');
 
 		setv('hop_mode', this.hopMode());
-		setv('country_code', this.countrySel ? this.countrySel.value : '');
-		setv('city_code', this.citySel ? this.citySel.value : '');
 
-		var fixed = this.serverSel ? this.serverSel.value : '';
+		// The location set is the single source of truth; the legacy
+		// country/city options are cleared so both paths agree.
+		var codes = (this.poolEntries || []).map(function(e) { return e.code; });
+		if (codes.length)
+			uci.set('nordvpn', inst, 'locations', codes);
+		else
+			uci.unset('nordvpn', inst, 'locations');
+		uci.unset('nordvpn', inst, 'country_code');
+		uci.unset('nordvpn', inst, 'city_code');
+
+		var fixed = this._serverChosen || '';
 		setv('fixed_server', fixed);
 
 		// Routing toggles exist only when no manual scheme was detected; a
@@ -1094,8 +1702,11 @@ return view.extend({
 	},
 
 	save: function() {
-		if (!this.countrySel || !this.countrySel.value) {
-			this.notice(_('Please select a country.'), 'error');
+		// Require at least one location valid for the current hop mode; entries
+		// carried over from another mode (count null) do not count.
+		var validCount = (this.poolEntries || []).filter(function(e) { return e.count != null; }).length;
+		if (!validCount) {
+			this.notice(_('Please add at least one country or city for this hop mode.'), 'error');
 			return Promise.resolve();
 		}
 		this.collectIntoUci();
@@ -1241,7 +1852,8 @@ return view.extend({
 			return callLocations().then(L.bind(function(loc) {
 				this.locations = loc || { available: false };
 				dom.content(this.cacheRow, this.cacheSummary());
-				this.populateCountries();
+				this.rebuildPoolWidget();
+				this.refreshServerList();
 			}, this));
 		}, this));
 	},

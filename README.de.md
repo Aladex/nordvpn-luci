@@ -3,9 +3,10 @@
 [English](README.md) · [Русский](README.ru.md) · **Deutsch**
 
 Richtet den WireGuard-Dienst (NordLynx) von NordVPN unter OpenWrt ein — mit
-einmaligem Zugangsdaten-Austausch, Auswahl von Land/Stadt/Server (einschließlich
-Double VPN und Onion over VPN), automatischer Rotation, mehreren parallelen
-VPN-Instanzen, netzweiser Traffic-Steuerung mit Kill Switch und
+einmaligem Zugangsdaten-Austausch, einem Standort-Set zum Verbinden und Rotieren
+(ganze Länder oder einzelne Städte, einschließlich Double VPN und Onion over
+VPN), einer lastbewussten Server-Auswahl, automatischer Rotation, mehreren
+parallelen VPN-Instanzen, netzweiser Traffic-Steuerung mit Kill Switch und
 IPv6-Leck-Schutz sowie einer nativen LuCI-Seite.
 
 > **Inoffiziell.** Dieses Projekt ist weder mit Nord Security verbunden noch
@@ -146,16 +147,29 @@ CLI-Dienst; füge `luci-app-nordvpn` für die Weboberfläche hinzu.
 
    ![Onion-over-VPN-Modus](docs/screenshots/onion-mode.png)
 
-4. Wähle **Land** (erforderlich), optional **Stadt** und **Server**. Ländernamen
-   tragen Emoji-Flaggen (schlichte Namen auf Systemen ohne Flaggen-Glyphen).
-   Lass Stadt und Server auf *Automatisch*, um innerhalb des Landes zu rotieren.
-5. Aktiviere optional **Automatische Rotation** und einen Zeitplan. Bei aktiver
+4. Stelle ein **Standort-Set** (location set) zusammen — die Länder (und
+   optional einzelne Städte), zwischen denen diese Instanz verbindet und
+   rotiert. Ein Land auszuwählen fügt es ganz hinzu; öffne seinen Chip, um es auf
+   bestimmte Städte einzugrenzen. Sowohl die erste Verbindung als auch die
+   Rotation wählen innerhalb dieses Sets.
+
+   ![Standorte wählen](docs/screenshots/locations.gif)
+
+5. Lass **Server** auf *Automatisch* (empfohlen), damit die Rotation wählt, oder
+   öffne die Auswahl, um einen bestimmten Server festzupinnen. Die Liste ist nach
+   Land gruppiert und nach Last sortiert, mit einem Ein-Klick-**Lowest load**
+   (geringste Last). Einen Server festzupinnen deaktiviert die automatische
+   Rotation.
+
+   ![Server wählen](docs/screenshots/server.gif)
+
+6. Aktiviere optional **Automatische Rotation** und einen Zeitplan. Bei aktiver
    Rotation zeigt die Seite die konkrete **Nächste Rotation** an
    (router-geplant, angezeigt in der lokalen Zeitzone deines Browsers).
 
    ![Automatische Rotation](docs/screenshots/rotation.png)
 
-6. Klicke auf **Speichern und neu verbinden** (Save and reconnect).
+7. Klicke auf **Speichern und neu verbinden** (Save and reconnect).
 
 Einen Token bekommst du unter
 <https://my.nordaccount.com/dashboard/nordvpn/manual-configuration/> →
@@ -179,8 +193,10 @@ config instance 'main'
 	option routing_table ''
 	option mtu ''                     # leer = Standard 1420; UI empfiehlt WAN-80
 	option hop_mode 'single'          # 'multihop' (Double VPN) / 'onion' (via Tor)
-	option country_code 'ee'
-	option city_code 'ee-tallinn'
+	option country_code 'ee'         # Legacy-Fallback auf ein Land, nur wenn
+	option city_code 'ee-tallinn'    #   'locations' unten leer ist
+	list locations 'ee'              # Standort-Set: Länder und/oder 'cc-city',
+	list locations 'nl-amsterdam'    #   steuert Verbindung und Rotation
 	option fixed_server ''            # pin a gateway; disables rotation
 	option rotation_enabled '0'
 	option rotation_mode 'interval'  # or 'time'
@@ -226,7 +242,7 @@ ubus call nordvpn external_ip       # public IP as seen through the tunnel
 ubus call nordvpn disconnect        # take the tunnel down, pause rotation
 ubus call nordvpn clear_credentials # forget the stored WireGuard key
 ubus call nordvpn locations         # cached country/city tree (+ per-city counts)
-ubus call nordvpn servers '{"country":"de","city":"de-berlin","hop_mode":"single"}'
+ubus call nordvpn servers '{"locations":["de","nl-amsterdam"],"hop_mode":"single"}'
 ubus call nordvpn refresh_status    # cache-refresh job progress
 ubus call nordvpn set_credentials '{"token":"<64-hex-token>"}'
 ubus call nordvpn apply             # rebuild the peer and bring the tunnel up

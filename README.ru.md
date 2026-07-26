@@ -3,8 +3,9 @@
 [English](README.md) · **Русский** · [Deutsch](README.de.md)
 
 Настройка сервиса WireGuard (NordLynx) от NordVPN на OpenWrt: одноразовый
-обмен учётными данными, выбор страны/города/сервера (включая Double VPN и
-Onion over VPN), автоматическая ротация, несколько параллельных VPN-инстансов,
+обмен учётными данными, набор локаций для подключения и ротации (страны целиком
+или отдельные города, включая Double VPN и Onion over VPN), выбор сервера с
+учётом нагрузки, автоматическая ротация, несколько параллельных VPN-инстансов,
 маршрутизация трафика по сетям с kill switch (аварийное отключение) и защитой
 от утечки IPv6, а также нативная страница LuCI.
 
@@ -144,18 +145,29 @@ apk add ./nordvpn-wireguard-*.apk ./luci-app-nordvpn-*.apk   # 25.x / snapshots
 
    ![Режим Onion over VPN](docs/screenshots/onion-mode.png)
 
-4. Выберите **Country** (Страна, обязательно), при желании **City** (Город) и
-   **Server** (Сервер). Названия стран сопровождаются эмодзи-флагами (обычные
-   названия на системах без глифов флагов). Оставьте City и Server в положении
-   *Automatic*, чтобы ротировать внутри страны.
-5. При желании включите **Automatic rotation** (Автоматическую ротацию) и
+4. Соберите **набор локаций** (location set) — страны (и при желании отдельные
+   города), между которыми этот инстанс подключается и ротирует. Выбор страны
+   добавляет её целиком; откройте её чип, чтобы сузить до конкретных городов. И
+   первичное подключение, и ротация выбирают внутри этого набора.
+
+   ![Выбор локаций](docs/screenshots/locations.gif)
+
+5. Оставьте **Server** (Сервер) в положении *Automatic* (рекомендуется), чтобы
+   выбор делала ротация, или откройте пикер и закрепите конкретный сервер.
+   Список сгруппирован по странам и отсортирован по нагрузке, есть выбор в один
+   клик **Lowest load** (Минимальная нагрузка). Закрепление сервера отключает
+   автоматическую ротацию.
+
+   ![Выбор сервера](docs/screenshots/server.gif)
+
+6. При желании включите **Automatic rotation** (Автоматическую ротацию) и
    расписание. Когда ротация активна, страница показывает конкретное время
    **Next rotation** (Следующая ротация; запланировано роутером, отображается в
    местном часовом поясе вашего браузера).
 
    ![Автоматическая ротация](docs/screenshots/rotation.png)
 
-6. Нажмите **Save and reconnect** (Сохранить и переподключиться).
+7. Нажмите **Save and reconnect** (Сохранить и переподключиться).
 
 Получить токен можно на
 <https://my.nordaccount.com/dashboard/nordvpn/manual-configuration/> →
@@ -178,8 +190,10 @@ config instance 'main'
 	option routing_table ''
 	option mtu ''                     # пусто = дефолт 1420; UI советует WAN-80
 	option hop_mode 'single'          # 'multihop' (Double VPN) / 'onion' (via Tor)
-	option country_code 'ee'
-	option city_code 'ee-tallinn'
+	option country_code 'ee'         # легаси-фолбэк на одну страну, только когда
+	option city_code 'ee-tallinn'    #   'locations' ниже пуст
+	list locations 'ee'              # набор локаций: страны и/или 'cc-city',
+	list locations 'nl-amsterdam'    #   задаёт и подключение, и ротацию
 	option fixed_server ''            # pin a gateway; disables rotation
 	option rotation_enabled '0'
 	option rotation_mode 'interval'  # or 'time'
@@ -224,7 +238,7 @@ ubus call nordvpn external_ip       # public IP as seen through the tunnel
 ubus call nordvpn disconnect        # take the tunnel down, pause rotation
 ubus call nordvpn clear_credentials # forget the stored WireGuard key
 ubus call nordvpn locations         # cached country/city tree (+ per-city counts)
-ubus call nordvpn servers '{"country":"de","city":"de-berlin","hop_mode":"single"}'
+ubus call nordvpn servers '{"locations":["de","nl-amsterdam"],"hop_mode":"single"}'
 ubus call nordvpn refresh_status    # cache-refresh job progress
 ubus call nordvpn set_credentials '{"token":"<64-hex-token>"}'
 ubus call nordvpn apply             # rebuild the peer and bring the tunnel up

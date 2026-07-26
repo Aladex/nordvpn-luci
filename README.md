@@ -3,8 +3,9 @@
 **English** · [Русский](README.ru.md) · [Deutsch](README.de.md)
 
 Configure NordVPN's WireGuard (NordLynx) service on OpenWrt, with a one-time
-credential exchange, country/city/server selection (including Double VPN and
-Onion over VPN), automatic rotation, multiple parallel VPN instances,
+credential exchange, a location set to connect and rotate across (whole
+countries or specific cities, including Double VPN and Onion over VPN), a
+load-aware server picker, automatic rotation, multiple parallel VPN instances,
 per-network traffic steering with kill switch and IPv6 leak protection, and a
 native LuCI page.
 
@@ -141,16 +142,27 @@ Installing `nordvpn-wireguard` alone gives a working CLI/service; add
 
    ![Onion over VPN mode](docs/screenshots/onion-mode.png)
 
-4. Pick **Country** (required), optionally **City** and **Server**. Country
-   names carry emoji flags (plain names on systems without flag glyphs). Leave
-   City and Server on *Automatic* to rotate within the country.
-5. Optionally enable **Automatic rotation** and a schedule. When rotation is
+4. Build a **location set** — the countries (and optionally specific cities)
+   this instance connects and rotates across. Pick a country to add the whole
+   country; open its chip to narrow it to specific cities. Both the initial
+   connect and the rotation pick within this set.
+
+   ![Choosing locations](docs/screenshots/locations.gif)
+
+5. Leave **Server** on *Automatic* (recommended) to let rotation choose, or open
+   the picker to pin a specific server. The list is grouped by country and
+   sorted by load, with a one-click **Lowest load**. Pinning a server disables
+   automatic rotation.
+
+   ![Picking a server](docs/screenshots/server.gif)
+
+6. Optionally enable **Automatic rotation** and a schedule. When rotation is
    active the page shows the concrete **Next rotation** time (router-scheduled,
    shown in your browser's local time zone).
 
    ![Automatic rotation](docs/screenshots/rotation.png)
 
-6. Click **Save and reconnect**.
+7. Click **Save and reconnect**.
 
 Get a token at
 <https://my.nordaccount.com/dashboard/nordvpn/manual-configuration/> →
@@ -172,8 +184,10 @@ config instance 'main'
 	option routing_table ''
 	option mtu ''                     # empty = default 1420; UI recommends WAN-80
 	option hop_mode 'single'          # 'multihop' (Double VPN) / 'onion' (via Tor)
-	option country_code 'ee'
-	option city_code 'ee-tallinn'
+	option country_code 'ee'         # legacy single-country fallback, used only
+	option city_code 'ee-tallinn'    #   when 'locations' below is empty
+	list locations 'ee'              # location set: countries and/or 'cc-city',
+	list locations 'nl-amsterdam'    #   drives both the connect and the rotation
 	option fixed_server ''            # pin a gateway; disables rotation
 	option rotation_enabled '0'
 	option rotation_mode 'interval'  # or 'time'
@@ -217,7 +231,7 @@ ubus call nordvpn external_ip       # public IP as seen through the tunnel
 ubus call nordvpn disconnect        # take the tunnel down, pause rotation
 ubus call nordvpn clear_credentials # forget the stored WireGuard key
 ubus call nordvpn locations         # cached country/city tree (+ per-city counts)
-ubus call nordvpn servers '{"country":"de","city":"de-berlin","hop_mode":"single"}'
+ubus call nordvpn servers '{"locations":["de","nl-amsterdam"],"hop_mode":"single"}'
 ubus call nordvpn refresh_status    # cache-refresh job progress
 ubus call nordvpn set_credentials '{"token":"<64-hex-token>"}'
 ubus call nordvpn apply             # rebuild the peer and bring the tunnel up

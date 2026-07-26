@@ -244,9 +244,34 @@ function load_settings(uci, instance) {
 		push(source_networks, sn);
 	}
 
+	// `list locations` — the instance's location set: countries ('de') and/or
+	// cities ('de-berlin') that both the initial connect and the rotation pick
+	// from. Empty = the legacy country_code/city_code selection. A city code
+	// always carries its country prefix, so entries without a '-' are only
+	// valid as country codes.
+	let rp = uci.get('nordvpn', name, 'locations');
+	let locations = [];
+	let rp_add = function(x) {
+		let cc = validate_country_code(x);
+		if (cc) {
+			push(locations, cc);
+			return;
+		}
+		let loc = validate_location_code(x);
+		if (loc && index(loc, '-') > 0)
+			push(locations, loc);
+	};
+	if (type(rp) == 'array') {
+		for (let x in rp)
+			rp_add(x);
+	} else if (type(rp) == 'string') {
+		rp_add(rp);
+	}
+
 	return {
 		name: name,
 		source_networks: source_networks,
+		locations: locations,
 		enabled: g('enabled', '0') == '1',
 		interface: validate_interface(g('interface', DEFAULT_INTERFACE)) || DEFAULT_INTERFACE,
 		routing_table: g('routing_table', ''),

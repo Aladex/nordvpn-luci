@@ -33,6 +33,39 @@ function candidates(cache, country_code, city_code, hop_mode) {
 	return out;
 }
 
+// Union of candidates() over a location set: entries are country codes
+// ('de') or city codes ('de-berlin', the country derived from the prefix).
+// Deduped by hostname so a city inside a set country appears once.
+// Garbage entries contribute nothing.
+function location_candidates(cache, locations, hop_mode) {
+	let out = [], seen = {};
+	if (type(locations) != 'array')
+		return out;
+	for (let entry in locations) {
+		let list = [];
+		if (match(entry, /^[A-Za-z]{2}$/))
+			list = candidates(cache, entry, '', hop_mode);
+		else if (type(entry) == 'string' && index(entry, '-') > 0)
+			list = candidates(cache, split(entry, '-')[0], entry, hop_mode);
+		for (let r in list) {
+			if (seen[r.hostname])
+				continue;
+			seen[r.hostname] = true;
+			push(out, r);
+		}
+	}
+	return out;
+}
+
+// The instance's candidate set, shared by apply and rotation: a non-empty
+// location set wins; otherwise the legacy country/city selection.
+function selection_candidates(cache, settings) {
+	let loc = settings ? settings.locations : null;
+	if (loc && length(loc) > 0)
+		return location_candidates(cache, loc, settings.hop_mode);
+	return candidates(cache, settings.country_code, settings.city_code, settings.hop_mode);
+}
+
 // Find a specific relay by its gateway hostname.
 function by_hostname(cache, hostname) {
 	if (!cache || type(cache.countries) != 'array' || !hostname)
@@ -59,4 +92,4 @@ function pick(list, exclude_hostname) {
 	return pool[rand() % length(pool)];
 }
 
-return { candidates, by_hostname, pick };
+return { candidates, location_candidates, selection_candidates, by_hostname, pick };

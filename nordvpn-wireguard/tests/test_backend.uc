@@ -10,7 +10,9 @@ import { readfile, writefile, unlink, mkdir, popen, pipe } from 'fs';
 const _cache = require('nordvpn.cache');
 const normalize = _cache.normalize, write_cache = _cache.write_cache;
 const _select = require('nordvpn.select');
-const candidates = _select.candidates, by_hostname = _select.by_hostname, pick = _select.pick;
+const candidates = _select.candidates, by_hostname = _select.by_hostname, pick = _select.pick,
+      location_candidates = _select.location_candidates,
+      selection_candidates = _select.selection_candidates;
 const parse_credentials = require('nordvpn.api').parse_credentials;
 const write_relay = require('nordvpn.apply').write_relay;
 const _cmn = require('nordvpn.common');
@@ -164,6 +166,49 @@ write_cache(cache, cpath);
 	_rotate.mark_attempt(3000);
 	eq('mark_attempt keeps last_success', _rotate.read_state().last_success, 2000);
 	unlink('/tmp/nordvpn_rotate_state.json');
+}
+
+// 6c. unified locations: parsing in load_settings + the shared candidate set.
+//     A non-empty `list locations` (country codes and/or cc-city codes) is the
+//     instance's location set for BOTH apply and rotation; empty falls back to
+//     the legacy country_code/city_code selection.
+{
+	// load_settings: locations defaults to empty, parses a mixed list, drops garbage.
+	global.MOCK_UCI = { nordvpn: { main: { '.type': 'instance', interface: 'nordvpn' } }, network: {} };
+	eq('locations default empty', load_settings(cursor()).locations, []);
+
+	global.MOCK_UCI = { nordvpn: { main: { '.type': 'instance', interface: 'nordvpn',
+		locations: [ 'DE', 'nl-amsterdam', 'se' ] } }, network: {} };
+	eq('locations parses mixed countries and cities', load_settings(cursor()).locations, [ 'de', 'nl-amsterdam', 'se' ]);
+
+	global.MOCK_UCI = { nordvpn: { main: { '.type': 'instance', interface: 'nordvpn',
+		locations: [ 'de!bad', '', 'us9999.nordvpn.com', 'us' ] } }, network: {} };
+	eq('locations drops invalid entries', load_settings(cursor()).locations, [ 'us' ]);
+
+	global.MOCK_UCI = { nordvpn: { main: { '.type': 'instance', interface: 'nordvpn',
+		locations: 'ee' } }, network: {} };
+	eq('locations coerces a single string', load_settings(cursor()).locations, [ 'ee' ]);
+
+	// location_candidates: union across countries/cities, dedup by hostname, hop filter.
+	eq('set union of two countries', length(location_candidates(cache, [ 'ee', 'us' ], 'single')), 2);
+	eq('set country + city of another country', length(location_candidates(cache, [ 'ee', 'nl-amsterdam' ], 'single')), 1);
+	eq('set city only, onion', location_candidates(cache, [ 'nl-amsterdam' ], 'onion')[0].hostname, 'nl-onion1.nordvpn.com');
+	eq('set dedups a city inside a set country', length(location_candidates(cache, [ 'nl', 'nl-amsterdam' ], 'multihop')), 1);
+	eq('set empty list yields nothing', location_candidates(cache, [], 'single'), []);
+	eq('set ignores garbage entries', length(location_candidates(cache, [ 'de!bad' ], 'single')), 0);
+
+	// selection_candidates: the shared apply/rotation candidate set.
+	let sl = { country_code: 'ee', city_code: '', hop_mode: 'single', locations: [ 'ee', 'us' ] };
+	eq('selection prefers the location set', length(selection_candidates(cache, sl)), 2);
+	let se = { country_code: 'ee', city_code: '', hop_mode: 'single', locations: [] };
+	eq('selection falls back when set empty', length(selection_candidates(cache, se)), 1);
+	let sg = { country_code: 'ee', city_code: '', hop_mode: 'single' };
+	eq('selection falls back when set missing (legacy)', length(selection_candidates(cache, sg)), 1);
+
+	// plan_candidates goes through the same set and excludes the gateway.
+	eq('plan uses the location set', length(plan_candidates(cache, { ...sl, max_retries: 10 }, null, 10)), 2);
+	eq('plan set excludes current gateway', plan_candidates(cache, { ...sl, max_retries: 10 }, 'ee70.nordvpn.com', 10)[0].hostname, 'us9999.nordvpn.com');
+	eq('plan falls back when set missing', length(plan_candidates(cache, { ...sg, max_retries: 10 }, null, 10)), 1);
 }
 
 // 7. scheduler decisions (pure)

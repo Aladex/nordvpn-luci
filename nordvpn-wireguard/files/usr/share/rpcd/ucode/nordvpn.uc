@@ -10,6 +10,8 @@ import { cursor } from 'uci';
 const _common = require('nordvpn.common');
 const validate_token = _common.validate_token,
       validate_instance = _common.validate_instance,
+      validate_country_code = _common.validate_country_code,
+      validate_location_code = _common.validate_location_code,
       load_settings = _common.load_settings,
       list_instances = _common.list_instances,
       cache_file_path = _common.cache_file_path;
@@ -32,7 +34,8 @@ const read_cache = _cache.read_cache,
       read_fetch_status = _cache.read_fetch_status,
       cache_is_stale = _cache.cache_is_stale,
       locations_tree = _cache.locations_tree,
-      city_relays = _cache.city_relays;
+      city_relays = _cache.city_relays,
+      pool_relays = _cache.pool_relays;
 
 const methods = {};
 
@@ -99,12 +102,29 @@ methods.locations = {
 };
 
 methods.servers = {
-	args: { country: '', city: '', hop_mode: '' },
+	args: { country: '', city: '', hop_mode: '', locations: [] },
 	call: function(request) {
 		let a = request.args || {};
 		let cache = read_cache(cache_file_path(load_settings(cursor())));
 		if (!cache)
 			return { relays: [] };
+		// A non-empty location set returns the union (with grouping fields for
+		// the UI); entries are validated, garbage is dropped. The legacy
+		// country/city call is unchanged.
+		if (type(a.locations) == 'array' && length(a.locations) > 0) {
+			let set = [];
+			for (let e in a.locations) {
+				let cc = validate_country_code(e);
+				if (cc) {
+					push(set, cc);
+					continue;
+				}
+				let loc = validate_location_code(e);
+				if (loc && index(loc, '-') > 0)
+					push(set, loc);
+			}
+			return { relays: pool_relays(cache, set, a.hop_mode) };
+		}
 		return { relays: city_relays(cache, a.country, a.city, a.hop_mode) };
 	}
 };

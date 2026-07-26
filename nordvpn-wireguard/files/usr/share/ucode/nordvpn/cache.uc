@@ -281,6 +281,36 @@ function locations_tree(cache) {
 	return out;
 }
 
+// Union of relays over a location set (country codes and/or cc-city codes),
+// each entry carrying the grouping fields the UI needs (country_code,
+// city_code, city). Deduped by hostname; hop_mode filters the relay kind.
+function pool_relays(cache, locations, hop_mode) {
+	let out = [], seen = {};
+	if (!cache || type(cache.countries) != 'array' || type(locations) != 'array')
+		return out;
+	let want = (hop_mode == 'multihop' || hop_mode == 'onion') ? hop_mode : 'single';
+	let set = {};
+	for (let e in locations)
+		if (type(e) == 'string' && e != '')
+			set[lc(e)] = true;
+	for (let c in cache.countries) {
+		for (let city in c.cities) {
+			if (!set[lc(c.code)] && !set[city.code])
+				continue;
+			for (let r in city.relays) {
+				let k = relay_kind(r);
+				if (k != want || seen[r.hostname])
+					continue;
+				seen[r.hostname] = true;
+				push(out, { hostname: r.hostname, name: r.name, load: r.load,
+					multihop: k == 'multihop', onion: k == 'onion',
+					country_code: lc(c.code), city_code: city.code, city: city.name });
+			}
+		}
+	}
+	return out;
+}
+
 // Trimmed relay list for one city, optionally filtered by hop mode.
 function city_relays(cache, country_code, city_code, hop_mode) {
 	let out = [];
@@ -445,6 +475,6 @@ function fetch_and_build(path) {
 
 return {
 	write_fetch_status, read_fetch_status, add_server, normalize,
-	locations_tree, city_relays,
+	locations_tree, city_relays, pool_relays,
 	fetch_servers, read_cache, cache_is_stale, write_cache, fetch_and_build
 };

@@ -18,7 +18,7 @@ const load_settings = _common.load_settings,
       release_lock = _common.release_lock,
       log = _common.log;
 const read_cache = require('nordvpn.cache').read_cache;
-const candidates = require('nordvpn.select').candidates;
+const selection_candidates = require('nordvpn.select').selection_candidates;
 const _apply = require('nordvpn.apply');
 const bring_up = _apply.bring_up,
       current_peer = _apply.current_peer,
@@ -65,9 +65,10 @@ function current_key(saved) {
 }
 
 // Ordered candidate list: matching relays, current gateway excluded, shuffled
-// and capped at `limit`. Pure/testable.
+// and capped at `limit`. Drawn from the instance's location set (or the legacy
+// country/city selection). Pure/testable.
 function plan_candidates(cache, settings, current_gateway, limit) {
-	let list = candidates(cache, settings.country_code, settings.city_code, settings.hop_mode);
+	let list = selection_candidates(cache, settings);
 	if (current_gateway)
 		list = filter(list, function(r) { return r.hostname != current_gateway; });
 	list = shuffle(list);

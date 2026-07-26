@@ -27,6 +27,11 @@ config instance 'main'
 	option rotation_mode 'interval'
 	option rotation_interval '360'
 	option rotation_time '04:30'
+	# Location set: countries ('de') and/or cities ('nl-amsterdam') that BOTH
+	# the initial connect and the rotation pick from. Empty = the legacy
+	# country_code/city_code selection above is used.
+	# list locations 'de'
+	# list locations 'nl-amsterdam'
 	# Seconds to wait for a WireGuard handshake when verifying a server, and
 	# how many candidate servers a rotation may try before giving up.
 	option verify_timeout '8'

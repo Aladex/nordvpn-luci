@@ -41,6 +41,16 @@ eq('locations available', loc.available, true);
 eq('locations ready', loc.state, 'ready');
 eq('locations country count', length(loc.countries), 3);
 
+// servers: legacy city call, and the union call for a location set
+let srv_legacy = m.servers.call({ args: { country: 'ee', city: 'ee-tallinn', hop_mode: 'single' } });
+eq('servers legacy returns ee relays', length(srv_legacy.relays), 1);
+let srv_union = m.servers.call({ args: { locations: [ 'ee', 'us' ], hop_mode: 'single' } });
+eq('servers union of two countries', length(srv_union.relays), 2);
+ok('servers union carries grouping fields', srv_union.relays[0].country_code != null && srv_union.relays[0].city_code != null && srv_union.relays[0].city != null);
+let srv_dedup = m.servers.call({ args: { locations: [ 'nl', 'nl-amsterdam' ], hop_mode: 'multihop' } });
+eq('servers union dedups city inside country', length(srv_dedup.relays), 1);
+eq('servers union empty set yields nothing', length(m.servers.call({ args: { locations: [], hop_mode: 'single' } }).relays), 0);
+
 // refresh_status idle when no job file
 eq('refresh_status idle', m.refresh_status.call().state, 'idle');
 

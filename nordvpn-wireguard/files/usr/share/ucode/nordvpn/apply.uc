@@ -19,7 +19,7 @@ const FIXED_ADDRESS = _common.FIXED_ADDRESS,
 const _cache = require('nordvpn.cache');
 const read_cache = _cache.read_cache;
 const _select = require('nordvpn.select');
-const candidates = _select.candidates,
+const selection_candidates = _select.selection_candidates,
       by_hostname = _select.by_hostname,
       pick = _select.pick;
 const _api = require('nordvpn.api');
@@ -116,8 +116,11 @@ function write_relay(uci, iface, relay, s) {
 		uci.delete('network', iface, 'mtu');
 
 	uci.set('network', iface, 'nordvpn_location', relay.location);
-	uci.set('network', iface, 'nordvpn_country_code', s.country_code);
-	uci.set('network', iface, 'nordvpn_city_code', s.city_code);
+	// Stamp the ACTUAL server's country/city: with a location set the
+	// connected relay may sit in any of the set's countries, and the status
+	// must reflect where the tunnel really exits (exit country for multihop).
+	uci.set('network', iface, 'nordvpn_country_code', relay.exit_country_code || s.country_code);
+	uci.set('network', iface, 'nordvpn_city_code', relay.location || s.city_code);
 	uci.set('network', iface, 'nordvpn_last_applied', iso_ts());
 
 	let peer = find_peer(uci, iface);
@@ -296,7 +299,7 @@ function apply_inner(uci, instance) {
 		};
 	}
 
-	let list = candidates(cache, s.country_code, s.city_code, s.hop_mode);
+	let list = selection_candidates(cache, s);
 	if (length(list) == 0)
 		return { state: 'failure', error: 'no matching server found for the current selection' };
 	list = shuffle(list);

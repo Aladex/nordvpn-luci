@@ -1266,6 +1266,9 @@ return view.extend({
 				? _('Recommended %d for your WAN (MTU %d). Empty = the default (1420). Lower it if sites/Gmail hang or throughput is poor — LTE/5G often need less.').format(recMtu, rtx.wan_mtu || 0)
 				: _('WireGuard interface MTU. Empty = the netifd default (1420).'));
 
+		this.wdBox = E('input', { type: 'checkbox', change: L.bind(this.markDirty, this) });
+		this.wdBox.checked = (g('watchdog', '0') === '1');
+
 		var body = E('div', { class: 'cbi-section-node' }, [
 			this.row(_('Interface name'), [ this.input('interface', 'text', g('interface', 'nordvpn')) ],
 				_('Name of the managed WireGuard interface. ⚠ Changing it after setup recreates the tunnel under the new name and orphans the old interface’s firewall/routing objects.')),
@@ -1276,6 +1279,9 @@ return view.extend({
 				_('How long to wait for a WireGuard handshake before giving up on a server')),
 			this.maxRetriesRow = this.row(_('Max server attempts'), [ this.input('max_retries', 'number', g('max_retries', '10'), { min: 1, max: 50, style: 'width:80px' }) ],
 				_('How many candidate servers a rotation may try')),
+			this.wdRow = this.row(_('Auto-reconnect (watchdog)'), [
+				E('label', { class: 'nv-check' }, [ this.wdBox, _('Reconnect automatically when the tunnel goes stale') ])
+			], _('Auto-reconnect when the tunnel goes stale (handshake-based; no external probe; off when a specific server is pinned)')),
 			this.row(_('Cache directory'), [ this.input('cache_dir', 'text', gm('cache_dir', ''), { placeholder: '/tmp' }) ],
 				_('Where to store the downloaded server list, shared by all instances (leave empty for /tmp)')),
 			this.row(_('Server cache'), [
@@ -1288,8 +1294,10 @@ return view.extend({
 
 		// The connection section is built (and may restore a pinned server)
 		// before this row exists — sync the initial visibility.
-		if (this._serverChosen)
+		if (this._serverChosen) {
 			this.maxRetriesRow.classList.add('hidden');
+			this.wdRow.classList.add('hidden');
+		}
 
 		return E('details', { class: 'nv-advanced cbi-section' }, [
 			E('summary', {}, _('Advanced settings')),
@@ -1600,6 +1608,9 @@ return view.extend({
 		// With a pinned server there are no candidates to try.
 		if (this.maxRetriesRow)
 			this.maxRetriesRow.classList.toggle('hidden', !!fixed);
+		// The watchdog never fires with a pinned server either.
+		if (this.wdRow)
+			this.wdRow.classList.toggle('hidden', !!fixed);
 		this.onRotationToggle();
 	},
 
@@ -1699,6 +1710,10 @@ return view.extend({
 			setv('rotation_interval', this.rotInterval ? this.rotInterval.value : '360');
 			setv('rotation_time', this.rotTime ? this.rotTime.value : '04:30');
 		}
+
+		// Written unconditionally (not tied to the routing block); the backend
+		// ignores it while a server is pinned.
+		uci.set('nordvpn', inst, 'watchdog', (this.wdBox && this.wdBox.checked) ? '1' : '0');
 	},
 
 	save: function() {

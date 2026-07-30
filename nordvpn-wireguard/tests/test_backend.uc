@@ -126,6 +126,20 @@ write_cache(cache, cpath);
 
 	global.MOCK_UBUS = { 'network.interface.nordvpn~status': { up: true, l3_device: 'nordvpn' } };
 	eq('status connecting (up, no handshake)', status(cursor()).state, 'connecting');
+
+	// status() runs on every daemon tick once the watchdog is on. A ubus
+	// connection leaked per call exhausts ubusd's descriptors within hours and
+	// then NOTHING on the router can reach ubus — so assert we close them.
+	global.MOCK_UBUS_OPEN = 0;
+	for (let i = 0; i < 25; i++)
+		status(cursor());
+	eq('status leaves no ubus connection open', global.MOCK_UBUS_OPEN, 0);
+
+	// Also when the interface is missing, i.e. the call itself fails.
+	global.MOCK_UBUS = {};
+	global.MOCK_UBUS_OPEN = 0;
+	status(cursor());
+	eq('status closes ubus even when the call fails', global.MOCK_UBUS_OPEN, 0);
 }
 
 // 6. rotation planning (pure): shuffle + candidate exclusion/limit

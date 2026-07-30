@@ -86,7 +86,10 @@ function status(uci, instance) {
 	if (!has_key)
 		return result;
 
-	// Interface up? and its L3 device name, via netifd.
+	// Interface up? and its L3 device name, via netifd. The connection is closed
+	// immediately: status() is called on every daemon tick (watchdog), and a
+	// leaked connection per tick exhausts ubusd's file descriptors within hours,
+	// after which nothing on the router can talk to ubus at all.
 	let ifup = false, l3dev = iface;
 	let ub = connect();
 	if (ub) {
@@ -96,6 +99,7 @@ function status(uci, instance) {
 			if (st.l3_device)
 				l3dev = st.l3_device;
 		}
+		ub.disconnect();
 	}
 
 	let hs = handshake_age(l3dev);

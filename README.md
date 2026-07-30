@@ -188,13 +188,14 @@ config instance 'main'
 	option city_code 'ee-tallinn'    #   when 'locations' below is empty
 	list locations 'ee'              # location set: countries and/or 'cc-city',
 	list locations 'nl-amsterdam'    #   drives both the connect and the rotation
-	option fixed_server ''            # pin a gateway; disables rotation
+	option fixed_server ''            # pin a gateway; disables rotation and watchdog
 	option rotation_enabled '0'
 	option rotation_mode 'interval'  # or 'time'
 	option rotation_interval '360'   # minutes
 	option rotation_time '04:30'     # HH:MM, router local time
 	option verify_timeout '8'        # seconds to wait for a WG handshake
 	option max_retries '10'          # candidate servers per rotation
+	option watchdog '0'              # auto-reconnect a stale tunnel (off when pinned)
 	option auto_routing '1'          # route all LAN traffic via the VPN
 	list source_network 'media'      # or: steer only these networks (see below)
 	option killswitch '0'            # block steered traffic while VPN is down
@@ -331,6 +332,26 @@ single-hop pool, a country — or a pinned city — may expose only one server o
 that kind, in which case there is nothing to rotate to and the current tunnel is
 kept. Onion over VPN exists in only a handful of countries at all, so pairing it
 with a country that has none leaves rotation with no candidates.
+
+### Auto-reconnect (watchdog)
+
+An optional per-instance **watchdog** recovers a tunnel that dies between
+scheduled rotations. Enable it under **Advanced settings → Auto-reconnect
+(watchdog)** or with `option watchdog '1'` (default off; instances that leave
+it off are never even probed). Once enabled, the daemon checks the tunnel
+state on every 30-second tick, and when the state stays `connecting`,
+`degraded`, or `disconnected` for at least 60 seconds (a grace window that
+absorbs both normal connection setup and transient rekeys) it recovers by
+rotating to another verified server. Attempts are
+spaced by an exponential backoff — 120 s, doubling per failed attempt, capped
+at 900 s — that resets as soon as the tunnel is connected again, so a dead
+server pool is not hammered. Detection is **handshake-based only**: the
+watchdog notices a dead or unresponsive server (a stale WireGuard handshake)
+but runs **no external egress probe**, so a tunnel whose handshake is alive
+while outbound connectivity is broken is *not* detected. Like rotation, the
+watchdog never fires while a specific server is pinned (the LuCI checkbox is
+hidden then), and its recovery runs under the same per-instance lock as
+scheduled rotation, so the two never race.
 
 ### Server-list cache
 

@@ -194,13 +194,14 @@ config instance 'main'
 	option city_code 'ee-tallinn'    #   'locations' ниже пуст
 	list locations 'ee'              # набор локаций: страны и/или 'cc-city',
 	list locations 'nl-amsterdam'    #   задаёт и подключение, и ротацию
-	option fixed_server ''            # pin a gateway; disables rotation
+	option fixed_server ''            # pin a gateway; disables rotation and watchdog
 	option rotation_enabled '0'
 	option rotation_mode 'interval'  # or 'time'
 	option rotation_interval '360'   # minutes
 	option rotation_time '04:30'     # HH:MM, router local time
 	option verify_timeout '8'        # seconds to wait for a WG handshake
 	option max_retries '10'          # candidate servers per rotation
+	option watchdog '0'              # auto-reconnect a stale tunnel (off when pinned)
 	option auto_routing '1'          # route all LAN traffic via the VPN
 	list source_network 'media'      # or: steer only these networks (see below)
 	option killswitch '0'            # block steered traffic while VPN is down
@@ -346,6 +347,26 @@ VPN с той же страной **выхода** (страна входа мо
 что и текущий туннель сохраняется. Onion over VPN вообще существует лишь в
 нескольких странах, поэтому пара с страной, где его нет, оставляет ротацию без
 кандидатов.
+
+### Авто-реконнект (watchdog)
+
+Опциональный per-instance **watchdog** восстанавливает туннель, отвалившийся
+между плановыми ротациями. Включается в **Advanced settings → Auto-reconnect
+(watchdog)** или опцией `option watchdog '1'` (по умолчанию выключен; инстансы
+без него демон даже не опрашивает). Когда включен, демон проверяет состояние
+туннеля на каждом 30-секундном тике, и если состояние держится `connecting`,
+`degraded` или `disconnected` не менее 60 секунд (grace-окно на нормальное
+установление соединения и транзиентный rekey), восстанавливает соединение
+ротацией на другой проверенный сервер. Попытки
+разнесены экспоненциальным backoff — 120 с, удвоение за каждый фейл, потолок
+900 с, — который сбрасывается, как только туннель снова connected, так что
+мёртвый пул серверов не долбится. Детект **только по хендшейку**: watchdog
+замечает мёртвый или неотвечающий сервер (протухший WireGuard-хендшейк), но
+**не делает внешней egress-пробы**, поэтому туннель с живым хендшейком и
+сломанным исходящим соединением *не* детектируется. Как и ротация, watchdog
+не срабатывает при запиненном сервере (чекбокс в LuCI тогда скрыт), а его
+восстановление идёт под тем же per-instance lock, что и плановая ротация, —
+гонки исключены.
 
 ### Кэш списка серверов
 

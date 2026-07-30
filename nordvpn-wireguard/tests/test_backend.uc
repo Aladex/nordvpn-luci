@@ -369,12 +369,18 @@ write_cache(cache, cpath);
 		"'use strict';\nrequire('nordvpn.rotate').record({ child_writer: 1 });\n");
 	let libdir = replace(RPCD, /\/rpcd\/ucode\/nordvpn\.uc$/, '/ucode');
 	let mocks = replace(fixture, /\/fixtures\/[^/]+$/, '/mocks');
-	let child = _cmn.open_cmd([
+	// A minimal ucode build (CI, dev hosts) ships fs.so/math.so outside the
+	// default search path; forward run.sh's extra -L so the child resolves them.
+	let child_argv = [
 		getenv('UCODE') || 'ucode',
 		'-L', mocks + '/*.uc',
-		'-L', libdir + '/*.uc',
-		'-S', child_script
-	], 'r');
+		'-L', libdir + '/*.uc'
+	];
+	let extra_l = getenv('UCODE_EXTRA_L');
+	if (extra_l)
+		push(child_argv, '-L', extra_l);
+	push(child_argv, '-S', child_script);
+	let child = _cmn.open_cmd(child_argv, 'r');
 	sleep(100);
 	parent_snapshot.parent_writer = 1;
 	_cmn.atomic_write(state_path, sprintf('%J', parent_snapshot));

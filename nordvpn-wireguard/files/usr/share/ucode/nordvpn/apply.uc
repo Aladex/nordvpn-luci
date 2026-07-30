@@ -226,9 +226,11 @@ function restore_wan_default() {
 			for (let rt in (ifc.route || [])) {
 				if (rt.target == '0.0.0.0' && rt.mask == 0 && rt.nexthop && rt.nexthop != '0.0.0.0') {
 					let res = run([ 'ip', 'route', 'add', 'default', 'via', rt.nexthop, 'dev', ifc.l3_device ]);
-					_common.log('restored missing WAN default route via ' + rt.nexthop + ' on ' + ifc.l3_device);
 					if (res.code != 0)
 						return false;
+					// Only claim success once the route really went in.
+					_common.log('restored missing WAN default route via ' + rt.nexthop +
+						' on ' + ifc.l3_device);
 				}
 			}
 		}

@@ -20,10 +20,16 @@ const fetch_and_build = _cache.fetch_and_build,
 const _rotate = require('nordvpn.rotate');
 const rotate = _rotate.rotate,
       last_attempt_ts = _rotate.last_attempt_ts,
-      mark_attempt = _rotate.mark_attempt;
+      mark_attempt = _rotate.mark_attempt,
+      read_state = _rotate.read_state,
+      record = _rotate.record;
 const _service = require('nordvpn.service');
 const should_refresh = _service.should_refresh,
-      should_rotate = _service.should_rotate;
+      should_rotate = _service.should_rotate,
+      should_recover = _service.should_recover,
+      watchdog_update = _service.watchdog_update,
+      watchdog_result_update = _service.watchdog_result_update;
+const status = require('nordvpn.status').status;
 
 uloop.init();
 
@@ -58,6 +64,58 @@ function tick() {
 		} else if (should_rotate(s, last, now, hm)) {
 			mark_attempt(now, inst);
 			uloop.task(function() { rotate(null, inst); });
+		}
+
+		// Watchdog timers persist in the per-instance rotate state across daemon
+		// restarts. Ineligible instances clear that state without a status probe,
+		// so enabling or unpinning always starts with a fresh grace window.
+		let st = read_state(inst) || {};
+		let ds = (type(st.degraded_since) == 'int') ? st.degraded_since : 0;
+		let last_recover = (type(st.last_recover) == 'int') ? st.last_recover : 0;
+		let fails = (type(st.recover_fails) == 'int') ? st.recover_fails : 0;
+		let active = s.enabled && s.watchdog &&
+			!(s.fixed_server && s.fixed_server != '');
+		if (!active) {
+			let upd = watchdog_update(null, {
+				degraded_since: ds,
+				last_recover: last_recover,
+				recover_fails: fails
+			}, now, false);
+			if (upd.degraded_since != ds || upd.last_recover != last_recover ||
+			    upd.recover_fails != fails)
+				record(upd, inst);
+			continue;
+		}
+
+		let state = status(uci, inst).state;
+		let upd = watchdog_update(state, {
+			degraded_since: ds,
+			last_recover: last_recover,
+			recover_fails: fails
+		}, now, true);
+		if (upd.degraded_since != ds || upd.last_recover != last_recover ||
+		    upd.recover_fails != fails) {
+			record(upd, inst);
+			ds = upd.degraded_since;
+			last_recover = upd.last_recover;
+			fails = upd.recover_fails;
+		}
+		if (should_recover(s, state, ds, last_recover, fails, now)) {
+			// Claim the attempt before forking so overlapping ticks cannot
+			// double-fire. The worker result advances backoff only for a real
+			// failed recovery, not when another rotation owns the lock.
+			record({ last_recover: now }, inst);
+			uloop.task(
+				function() { return rotate(null, inst); },
+				function(result) {
+					let latest = read_state(inst) || {};
+					let current = (type(latest.recover_fails) == 'int')
+						? latest.recover_fails : 0;
+					let next = watchdog_result_update(result, current);
+					if (next != current)
+						record({ recover_fails: next }, inst);
+				}
+			);
 		}
 	}
 }

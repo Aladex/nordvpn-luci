@@ -23,7 +23,9 @@ const shuffle = _rotate.shuffle, plan_candidates = _rotate.plan_candidates,
       current_key = _rotate.current_key;
 const _service = require('nordvpn.service');
 const should_refresh = _service.should_refresh, should_rotate = _service.should_rotate,
-      next_rotation = _service.next_rotation;
+      next_rotation = _service.next_rotation, should_recover = _service.should_recover,
+      watchdog_update = _service.watchdog_update,
+      watchdog_result_update = _service.watchdog_result_update;
 const _routing = require('nordvpn.routing');
 const detect_routing = _routing.detect, enforce_routing = _routing.enforce,
       recommend_mtu = _routing.recommend_mtu;
@@ -250,6 +252,141 @@ write_cache(cache, cpath);
 	ok('time mode within 24h', (nr - now) <= 86400);
 	let lt = localtime(nr);
 	ok('time mode lands on 04:30:00', lt.hour == 4 && lt.min == 30 && lt.sec == 0);
+}
+
+// 7c. watchdog recovery decision (pure). Gate order: master switch + watchdog
+//     option, pinned server, unhealthy state, grace, cooldown with backoff.
+//     Constants: GRACE=60, COOLDOWN_BASE=120, COOLDOWN_MAX=900.
+{
+	let s = { enabled: true, watchdog: true, fixed_server: '' };
+	let now = 100000;
+	let ds = now - 120; // unhealthy for 120s, grace (60s) elapsed
+
+	// Option/master gates.
+	ok('recover: watchdog off -> false', should_recover({ ...s, watchdog: false }, 'degraded', ds, 0, 0, now) == false);
+	ok('recover: instance disabled -> false', should_recover({ ...s, enabled: false }, 'degraded', ds, 0, 0, now) == false);
+	ok('recover: pinned server -> false', should_recover({ ...s, fixed_server: 'ee70.nordvpn.com' }, 'degraded', ds, now - 1000, 0, now) == false);
+
+	// State gate: connecting gets the same grace period as other unhealthy
+	// states, so a tunnel that never handshakes eventually recovers.
+	ok('recover: connected -> false', should_recover(s, 'connected', 0, 0, 0, now) == false);
+	ok('recover: connecting within grace -> false', should_recover(s, 'connecting', now - 30, 0, 0, now) == false);
+	ok('recover: connecting past grace -> true', should_recover(s, 'connecting', ds, 0, 0, now) == true);
+	ok('recover: not_configured -> false', should_recover(s, 'not_configured', 0, 0, 0, now) == false);
+
+	// Grace gate.
+	ok('recover: within grace -> false', should_recover(s, 'degraded', now - 30, 0, 0, now) == false);
+	ok('recover: no degraded_since -> false', should_recover(s, 'degraded', 0, 0, 0, now) == false);
+
+	// First attempt once the grace elapsed.
+	ok('recover: grace elapsed, never recovered -> true', should_recover(s, 'degraded', ds, 0, 0, now) == true);
+
+	// Cooldown gate with exponential backoff: after one completed failure the
+	// next attempt waits 120s; after two failures it waits 240s.
+	ok('recover: first retry within base cooldown -> false', should_recover(s, 'degraded', ds, now - 60, 1, now) == false);
+	ok('recover: first retry after base cooldown -> true', should_recover(s, 'degraded', ds, now - 120, 1, now) == true);
+	ok('recover: second retry before doubled cooldown -> false', should_recover(s, 'degraded', ds, now - 180, 2, now) == false);
+	ok('recover: second retry after doubled cooldown -> true', should_recover(s, 'degraded', ds, now - 240, 2, now) == true);
+	ok('recover: third retry before 480s cooldown -> false', should_recover(s, 'degraded', ds, now - 300, 3, now) == false);
+	ok('recover: third retry after 480s cooldown -> true', should_recover(s, 'degraded', ds, now - 480, 3, now) == true);
+
+	// Backoff clamps to COOLDOWN_MAX.
+	ok('recover: clamped backoff not elapsed -> false', should_recover(s, 'degraded', ds, now - 600, 10, now) == false);
+	ok('recover: clamped backoff elapsed -> true', should_recover(s, 'degraded', ds, now - 900, 10, now) == true);
+
+	// disconnected is unhealthy too.
+	ok('recover: disconnected past grace -> true', should_recover(s, 'disconnected', ds, 0, 0, now) == true);
+}
+
+// 7d. watchdog state transitions (pure): the daemon folds status() into the
+//     persisted timers once per tick.
+{
+	let now = 100000;
+
+	// Entering an unhealthy state stamps degraded_since once.
+	let u = watchdog_update('degraded', { degraded_since: 0, last_recover: 0, recover_fails: 0 }, now, true);
+	eq('watchdog: degraded stamps degraded_since', u.degraded_since, now);
+	eq('watchdog: stamp keeps fails', u.recover_fails, 0);
+
+	// Staying unhealthy keeps the original stamp.
+	u = watchdog_update('degraded', { degraded_since: now - 90, last_recover: now - 60, recover_fails: 1 }, now, true);
+	eq('watchdog: still degraded keeps stamp', u.degraded_since, now - 90);
+	eq('watchdog: still degraded keeps last recovery', u.last_recover, now - 60);
+	eq('watchdog: still degraded keeps fails', u.recover_fails, 1);
+
+	// connected clears all watchdog timing state.
+	u = watchdog_update('connected', { degraded_since: now - 90, last_recover: now - 60, recover_fails: 3 }, now, true);
+	eq('watchdog: connected clears timers', [ u.degraded_since, u.last_recover, u.recover_fails ], [ 0, 0, 0 ]);
+
+	// connecting starts the grace window even before the first handshake.
+	u = watchdog_update('connecting', { degraded_since: 0, last_recover: 0, recover_fails: 0 }, now, true);
+	eq('watchdog: connecting stamps degraded_since', u.degraded_since, now);
+
+	// Inactive and not-configured instances start with a fresh watchdog state
+	// when they become eligible again.
+	let stale = { degraded_since: now - 90, last_recover: now - 60, recover_fails: 2 };
+	u = watchdog_update('disconnected', stale, now, false);
+	eq('watchdog: inactive clears timers', [ u.degraded_since, u.last_recover, u.recover_fails ], [ 0, 0, 0 ]);
+	u = watchdog_update('not_configured', stale, now, true);
+	eq('watchdog: not configured clears timers', [ u.degraded_since, u.last_recover, u.recover_fails ], [ 0, 0, 0 ]);
+
+	// Only a completed failed recovery advances the backoff. A successful
+	// worker or one that merely lost the rotation-lock race does not.
+	eq('watchdog: failed result increments backoff',
+		watchdog_result_update({ error: 'no working server found' }, 0), 1);
+	eq('watchdog: skipped no-op increments backoff',
+		watchdog_result_update({ skipped: true, reason: 'no other server for the current selection' }, 1), 2);
+	eq('watchdog: success keeps backoff',
+		watchdog_result_update({ ok: true, server: 'ee70.nordvpn.com' }, 2), 2);
+	eq('watchdog: lock skip keeps backoff',
+		watchdog_result_update({ skipped: true, reason: 'rotation already running' }, 2), 2);
+
+	// Watchdog keys live in the same per-instance rotate state: a recovery
+	// result persists last_recover + an incremented recover_fails without
+	// clobbering the rotation clock.
+	unlink('/tmp/nordvpn_rotate_state.json');
+	_rotate.mark_attempt(1000);
+	_rotate.record({ degraded_since: 2000 });
+	_rotate.record({ last_recover: 3000, recover_fails: 1 });
+	let st8 = _rotate.read_state();
+	eq('watchdog: recovery keys persisted', [ st8.last_recover, st8.recover_fails, st8.degraded_since ], [ 3000, 1, 2000 ]);
+	eq('watchdog: rotation clock untouched', _rotate.last_attempt_ts(), 1000);
+	unlink('/tmp/nordvpn_rotate_state.json');
+
+	// Concurrent record() calls must serialize the read-modify-write cycle.
+	// Capture the parent snapshot before the child starts; without a state lock
+	// the parent overwrites the child's field from that stale snapshot.
+	let state_path = '/tmp/nordvpn_rotate_state.json';
+	let state_lock_path = '/tmp/nordvpn_rotate_state.lock';
+	let child_script = '/tmp/nordvpn_record_child.uc';
+	unlink(state_path);
+	unlink(state_lock_path);
+	_rotate.record({ base: 1 });
+	let parent_snapshot = _rotate.read_state();
+	let state_lock = _cmn.acquire_lock(state_lock_path, 30);
+	ok('watchdog: test acquired state lock', state_lock != null);
+	writefile(child_script,
+		"'use strict';\nrequire('nordvpn.rotate').record({ child_writer: 1 });\n");
+	let libdir = replace(RPCD, /\/rpcd\/ucode\/nordvpn\.uc$/, '/ucode');
+	let mocks = replace(fixture, /\/fixtures\/[^/]+$/, '/mocks');
+	let child = _cmn.open_cmd([
+		getenv('UCODE') || 'ucode',
+		'-L', mocks + '/*.uc',
+		'-L', libdir + '/*.uc',
+		'-S', child_script
+	], 'r');
+	sleep(100);
+	parent_snapshot.parent_writer = 1;
+	_cmn.atomic_write(state_path, sprintf('%J', parent_snapshot));
+	_cmn.release_lock(state_lock);
+	child.read('all');
+	child.close();
+	let concurrent = _rotate.read_state();
+	eq('watchdog: concurrent state writers preserve both updates',
+		[ concurrent.parent_writer, concurrent.child_writer ], [ 1, 1 ]);
+	unlink(child_script);
+	unlink(state_path);
+	unlink(state_lock_path);
 }
 
 // 8. routing detection and enforcement (mock uci; stamped objects only)

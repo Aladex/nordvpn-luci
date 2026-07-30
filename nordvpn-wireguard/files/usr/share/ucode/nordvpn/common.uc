@@ -42,6 +42,13 @@ const MAX_CACHE_REFRESH = 604800;     // 7 days
 const MIN_VERIFY_TIMEOUT = 2;         // seconds to wait for a handshake
 const MAX_VERIFY_TIMEOUT = 30;
 
+// Watchdog (auto-reconnect) tuning: how long an instance must stay unhealthy
+// before recovering, and the min/max pause between recovery attempts
+// (exponential backoff from BASE, clamped to MAX, reset on reconnect).
+const WATCHDOG_GRACE = 60;
+const WATCHDOG_COOLDOWN_BASE = 120;
+const WATCHDOG_COOLDOWN_MAX = 900;
+
 // ── Primitive validators ─────────────────────────────────────────────
 // Each returns a normalized value or null; callers treat null as invalid.
 
@@ -289,6 +296,9 @@ function load_settings(uci, instance) {
 		rotation_mode: validate_rotation_mode(g('rotation_mode', 'interval')) || 'interval',
 		rotation_interval: bi('rotation_interval', '360', MIN_ROTATION_INTERVAL, MAX_ROTATION_INTERVAL),
 		rotation_time: validate_time(g('rotation_time', '04:30')) || '04:30',
+		// Optional watchdog: auto-reconnect (rotate away) when the tunnel stays
+		// unhealthy. Off by default; never fires with a pinned fixed_server.
+		watchdog: g('watchdog', '0') == '1',
 		verify_timeout: bi('verify_timeout', '8', MIN_VERIFY_TIMEOUT, MAX_VERIFY_TIMEOUT),
 		max_retries: bi('max_retries', '10', 1, 50),
 		// Automatic traffic routing (zone + default route via the tunnel). The
@@ -438,6 +448,7 @@ return {
 	CACHE_MAX_AGE, CACHE_SCHEMA_VERSION, PAGE_SIZE, MAX_PAGES,
 	MIN_ROTATION_INTERVAL, MAX_ROTATION_INTERVAL, MIN_CACHE_REFRESH, MAX_CACHE_REFRESH,
 	MIN_VERIFY_TIMEOUT, MAX_VERIFY_TIMEOUT,
+	WATCHDOG_GRACE, WATCHDOG_COOLDOWN_BASE, WATCHDOG_COOLDOWN_MAX,
 	bounded_int, validate_interface, validate_token, validate_wg_key, validate_hostname,
 	validate_port, validate_hop_mode, validate_dns_mode, relay_kind, validate_rotation_mode, validate_interval, validate_time,
 	validate_country_code, validate_location_code, validate_instance, validate_routing_table, validate_dir,

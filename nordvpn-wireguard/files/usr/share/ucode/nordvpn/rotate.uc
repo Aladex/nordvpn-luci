@@ -29,6 +29,7 @@ const bring_up = _apply.bring_up,
 
 const ROTATE_LOCK = '/tmp/nordvpn_rotate.lock';
 const ROTATE_STATE = '/tmp/nordvpn_rotate_state.json';
+const ROTATE_STATE_LOCK = '/tmp/nordvpn_rotate_state.lock';
 
 const validate_instance = _common.validate_instance;
 
@@ -42,6 +43,12 @@ function state_path(instance) {
 function lock_path(instance) {
 	let n = validate_instance(instance) || 'main';
 	return (n == 'main') ? ROTATE_LOCK : '/tmp/nordvpn_rotate_' + n + '.lock';
+}
+
+function state_lock_path(instance) {
+	let n = validate_instance(instance) || 'main';
+	return (n == 'main') ? ROTATE_STATE_LOCK :
+		'/tmp/nordvpn_rotate_state_' + n + '.lock';
 }
 
 // Fisher-Yates shuffle (in a copy). Exported for testing.
@@ -90,15 +97,36 @@ function read_state(instance) {
 	}
 }
 
-// Merge fields into the persisted state and rewrite it atomically. Callers only
-// touch the keys they own (the daemon writes last_attempt; the worker writes
-// last_success + server), so neither clobbers the other's timestamp.
+// Merge fields into persisted state under a separate per-instance lock. The
+// atomic rename protects readers from partial JSON; the lock protects the
+// read-modify-write cycle from concurrent daemon and worker updates.
 function record(fields, instance) {
+	let lock = null;
+	// A state update normally holds the lock for only a few milliseconds.
+	// Wait through a stale lock's 30-second reclamation window instead of
+	// silently dropping rotation or watchdog metadata.
+	for (let i = 0; i < 1550 && !lock; i++) {
+		lock = acquire_lock(state_lock_path(instance), 30);
+		if (!lock)
+			sleep(20);
+	}
+	if (!lock) {
+		log('could not lock rotation state for ' +
+			(validate_instance(instance) || 'main'));
+		return null;
+	}
+
 	let st = read_state(instance) || {};
 	for (let k in fields)
 		st[k] = fields[k];
 	st.updated_at = iso_ts();
-	atomic_write(state_path(instance), sprintf('%J', st));
+	let ok = atomic_write(state_path(instance), sprintf('%J', st));
+	release_lock(lock);
+	if (!ok) {
+		log('could not write rotation state for ' +
+			(validate_instance(instance) || 'main'));
+		return null;
+	}
 	return st;
 }
 

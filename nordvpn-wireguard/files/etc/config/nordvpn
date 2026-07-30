@@ -36,6 +36,11 @@ config instance 'main'
 	# how many candidate servers a rotation may try before giving up.
 	option verify_timeout '8'
 	option max_retries '10'
+	# Optional watchdog: when the tunnel stays connecting, degraded, or
+	# disconnected past a grace period, rotate to another server automatically.
+	# Detection is handshake-based only (no external egress probe); ignored
+	# when a fixed_server is pinned.
+	# option watchdog '0'
 	# Automatic traffic routing: create a firewall zone and route all LAN
 	# traffic through the tunnel. Enabled for fresh installs; ignored (never
 	# touches anything) when a custom routing table or own routes are detected.

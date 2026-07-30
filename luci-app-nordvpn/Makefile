@@ -4,7 +4,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-nordvpn
-PKG_VERSION:=1.3.0
+PKG_VERSION:=1.4.0
 PKG_RELEASE:=1
 PKG_MAINTAINER:=Andrey Aleksandrov <aladex@gmail.com>
 PKG_LICENSE:=MIT

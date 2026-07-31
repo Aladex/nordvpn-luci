@@ -6,10 +6,16 @@
 
 'use strict';
 
-import { readfile, mkdir } from 'fs';
+import { readfile, mkdir, unlink } from 'fs';
 const _cache = require('nordvpn.cache');
 const normalize = _cache.normalize, write_cache = _cache.write_cache;
+const _common = require('nordvpn.common');
+const _apply_mod = require('nordvpn.apply');
 import { cursor } from 'uci';
+
+// Our own pid: the one process guaranteed alive while the apply-status
+// liveness check runs.
+const self_pid = int(split(trim(readfile('/proc/self/stat') || '0 '), ' ')[0]);
 
 let fails = 0;
 function ok(l, c) { if (c) printf('ok   %s\n', l); else { fails++; printf('FAIL %s\n', l); } }
@@ -19,8 +25,8 @@ function eq(l, g, w) { ok(l, sprintf('%J', g) == sprintf('%J', w)); }
 let obj = loadfile(RPCD)();
 let m = obj ? obj.nordvpn : null;
 ok('rpcd object present', m != null);
-ok('read methods present', type(m.status.call) == 'function' && type(m.locations.call) == 'function' && type(m.refresh_status.call) == 'function' && type(m.instances.call) == 'function');
-ok('write methods present', type(m.set_credentials.call) == 'function' && type(m.apply.call) == 'function' && type(m.rotate_now.call) == 'function' && type(m.refresh_locations.call) == 'function' && type(m.disconnect.call) == 'function' && type(m.clear_credentials.call) == 'function');
+ok('read methods present', type(m.status.call) == 'function' && type(m.locations.call) == 'function' && type(m.refresh_status.call) == 'function' && type(m.instances.call) == 'function' && type(m.apply_status.call) == 'function');
+ok('write methods present', type(m.set_credentials.call) == 'function' && type(m.apply.call) == 'function' && type(m.apply_start.call) == 'function' && type(m.rotate_now.call) == 'function' && type(m.refresh_locations.call) == 'function' && type(m.disconnect.call) == 'function' && type(m.clear_credentials.call) == 'function');
 
 // Build a cache on disk.
 let cache = normalize(json(readfile(fixture)));
@@ -62,6 +68,42 @@ global.MOCK_UCI = { nordvpn: { main: { '.type': 'settings', interface: 'nordvpn'
 	country_code: 'ee', city_code: '', hop_mode: 'single', cache_dir: cdir } },
 	network: { nordvpn: { '.type': 'interface', private_key: KEY } } };
 ok('apply returns a state object', m.apply.call().state != null);
+
+// apply_start / apply_status: the pair the UI uses instead of the blocking
+// `apply`. The synchronous method stays, but the page must be able to start an
+// apply and poll it, and a poll must never come back null.
+{
+	unlink(_common.APPLY_STATUS_FILE);
+	eq('apply_status idle without a job file', m.apply_status.call({}).state, 'idle');
+	eq('apply_start rejects an unknown instance',
+		m.apply_start.call({ args: { instance: 'nope' } }).error, 'no such instance');
+
+	// A running apply is visible to the poller and blocks a second start —
+	// two applies would rewrite the same interface and commit the same config.
+	let now = time();
+	_apply_mod.write_apply_status({ instance: 'main', state: 'running',
+		pid: self_pid, started_at: _common.iso_ts(now), started_at_epoch: now,
+		finished_at: null, result: null, error: null });
+	eq('apply_status reports a running apply', m.apply_status.call({}).state, 'running');
+	let busy = m.apply_start.call({ args: { instance: 'main' } });
+	eq('apply_start refuses to stack applies', busy.already_running, true);
+	eq('apply_start names the instance holding it', busy.apply.instance, 'main');
+
+	// The finished record is what the UI turns into its result banner, so the
+	// full apply() result has to survive the round trip through the file.
+	_apply_mod.write_apply_status({ instance: 'main', state: 'failed',
+		started_at: _common.iso_ts(now), started_at_epoch: now,
+		finished_at: _common.iso_ts(now), pid: null,
+		result: { state: 'failure', error: 'no credentials configured' },
+		error: 'no credentials configured' });
+	let done = m.apply_status.call({});
+	eq('apply_status reports the terminal state', done.state, 'failed');
+	eq('apply_status carries the apply result', done.result.state, 'failure');
+	eq('apply_status carries the error', done.error, 'no credentials configured');
+
+	unlink(_common.APPLY_STATUS_FILE);
+	eq('apply_status idle again', m.apply_status.call({}).state, 'idle');
+}
 
 // rotate_now is a no-op when a fixed server is pinned
 global.MOCK_UCI = { nordvpn: { main: { '.type': 'settings', interface: 'nordvpn',

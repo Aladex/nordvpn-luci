@@ -5,14 +5,19 @@
 'use strict';
 
 import { rand, srand } from 'math';
+import { readfile, unlink, stat } from 'fs';
 import { cursor } from 'uci';
 const _common = require('nordvpn.common');
 const FIXED_ADDRESS = _common.FIXED_ADDRESS,
       DEFAULT_PORT = _common.DEFAULT_PORT,
       DEFAULT_KEEPALIVE = _common.DEFAULT_KEEPALIVE,
+      APPLY_STATUS_FILE = _common.APPLY_STATUS_FILE,
+      APPLY_LOCK_FILE = _common.APPLY_LOCK_FILE,
+      APPLY_MAX_RUNTIME = _common.APPLY_MAX_RUNTIME,
       load_settings = _common.load_settings,
       cache_file_path = _common.cache_file_path,
       validate_interface = _common.validate_interface,
+      validate_instance = _common.validate_instance,
       validate_wg_key = _common.validate_wg_key,
       iso_ts = _common.iso_ts,
       run = _common.run;
@@ -336,6 +341,169 @@ function apply(uci, instance) {
 	return res;
 }
 
+// ── Asynchronous apply (worker + status file) ────────────────────────
+// apply() is slow by nature: it reads the multi-megabyte server cache and then
+// waits verify_timeout seconds per candidate for a handshake — NordVPN
+// publishes dead endpoints, so two silent candidates alone cost 16 s at the
+// default. rpcd serves ubus calls one at a time, so running that inside the
+// call starved everything else, including the `uci confirm` the browser sends
+// to keep its own changes: the router hit the rollback timer and reverted
+// /etc/config/nordvpn underneath the user. The UI therefore spawns
+// /usr/bin/nordvpn-apply and polls the status file written here, exactly like
+// the cache refresh does with nordvpn.cache's fetch status. The synchronous
+// apply() above stays as-is for scripts and the CLI.
+
+// Stamp `updated_at` and atomically write the apply-status file.
+function write_apply_status(status) {
+	if (type(status) != 'object')
+		return false;
+	status.updated_at = iso_ts();
+	return _common.atomic_write(APPLY_STATUS_FILE, sprintf('%J', status));
+}
+
+// Parsed apply-status object or null.
+function read_apply_status() {
+	let raw = readfile(APPLY_STATUS_FILE);
+	if (!raw)
+		return null;
+	try {
+		return json(raw);
+	} catch (e) {
+		return null;
+	}
+}
+
+// Own pid — the first field of /proc/self/stat. Recorded with a 'running'
+// record so a dead worker is detectable; null when /proc is unavailable, in
+// which case only the runtime ceiling applies.
+function self_pid() {
+	let raw = readfile('/proc/self/stat');
+	if (!raw)
+		return null;
+	let first = split(trim(raw), ' ')[0];
+	return match(first, /^[0-9]+$/) ? int(first) : null;
+}
+
+// Is this record a believable 'running' one? A worker can die mid-apply (a
+// reboot, the OOM killer, a stray `killall ucode`) and what it left behind
+// must not wedge the instance forever: an apply whose process is gone, or one
+// past the runtime ceiling, is not running whatever the file says. `now` is
+// injectable so the recovery rules stay testable.
+function apply_running(st, now) {
+	if (type(st) != 'object' || st.state != 'running')
+		return false;
+	now = now || time();
+	let started = (type(st.started_at_epoch) == 'int') ? st.started_at_epoch : 0;
+	// No start stamp, or one older than a whole apply could take: abandoned.
+	// A stamp in the future is just as implausible — routers have no RTC and
+	// the clock jumps the moment NTP lands, which must not freeze the record.
+	if (!started || (now - started) > APPLY_MAX_RUNTIME || started > (now + 60))
+		return false;
+	if (type(st.pid) == 'int' && st.pid > 0 && !stat('/proc/' + st.pid))
+		return false;
+	return true;
+}
+
+// The record the UI polls. A 'running' record whose worker is gone is turned
+// into a terminal 'failed' — and rewritten as such — so the page shows an
+// error instead of spinning forever and the next start_apply() is allowed.
+function apply_status_report(now) {
+	let st = read_apply_status();
+	if (!st)
+		return null;
+	if (st.state == 'running' && !apply_running(st, now)) {
+		st.state = 'failed';
+		st.stale = true;
+		st.pid = null;
+		st.finished_at = iso_ts(now);
+		st.error = 'the apply worker stopped unexpectedly';
+		write_apply_status(st);
+	}
+	return st;
+}
+
+// Apply one instance and record the outcome. This is the whole body of the
+// detached worker. The lock is what actually prevents two overlapping applies
+// (the status file is only what the UI reads), and its own stale reclamation
+// is the second recovery path for a killed worker.
+function run_apply(instance) {
+	let name = validate_instance(instance) || 'main';
+	let lock = _common.acquire_lock(APPLY_LOCK_FILE, APPLY_MAX_RUNTIME);
+	if (!lock) {
+		// The lock ages out on its own, but the status record knows sooner: a
+		// 'running' record whose worker is gone means this lock is orphaned, and
+		// honouring it would block the user's retry for minutes. Reclaim it only
+		// on that evidence — a missing or terminal record is exactly what a
+		// worker that took the lock a millisecond ago also looks like, and
+		// stealing the lock from it would run two applies at once.
+		let st = read_apply_status();
+		if (!st || st.state != 'running' || apply_running(st))
+			// Leave the status file alone: it belongs to the running apply.
+			return { skipped: true, reason: 'apply already running' };
+		unlink(APPLY_LOCK_FILE);
+		lock = _common.acquire_lock(APPLY_LOCK_FILE, APPLY_MAX_RUNTIME);
+		if (!lock)
+			return { skipped: true, reason: 'apply already running' };
+		_common.log('reclaimed the apply lock of a worker that never finished');
+	}
+
+	let started = time();
+	let base = { instance: name, started_at: iso_ts(started),
+		started_at_epoch: started };
+	write_apply_status({ ...base, state: 'running', pid: self_pid(),
+		finished_at: null, result: null, error: null });
+
+	let res;
+	try {
+		res = apply(cursor(), name);
+	} catch (e) {
+		// A throw must not leave the record on 'running' — the UI would wait out
+		// the whole ceiling for an apply that is already over.
+		res = { state: 'failure', error: 'apply error: ' + e };
+	}
+	_common.release_lock(lock);
+
+	let finished = time();
+	write_apply_status({ ...base, pid: null,
+		state: (res && res.state == 'success') ? 'done' : 'failed',
+		finished_at: iso_ts(finished), finished_at_epoch: finished,
+		result: res, error: (res && res.error) ? res.error : null });
+	return res;
+}
+
+// Spawn the detached worker for one instance and pre-record the 'running'
+// state, so a poll landing between the spawn and the worker's own first write
+// reads 'running' rather than the previous run's result. `echo $!` hands back
+// the worker's pid, which makes a worker that dies on the spot recoverable on
+// the next poll instead of only after APPLY_MAX_RUNTIME.
+function start_apply(instance) {
+	let name = validate_instance(instance);
+	if (!name)
+		return { error: 'invalid instance name' };
+
+	let st = apply_status_report();
+	if (apply_running(st))
+		return { already_running: true, apply: st };
+
+	// `name` is restricted to [A-Za-z0-9_], so it cannot break out of the
+	// sh -c string; quoting it here would only fight the outer sh_quote().
+	let r = run([ 'sh', '-c', '/usr/bin/nordvpn-apply ' + name +
+		' >/dev/null 2>&1 & echo $!' ]);
+	if (r.code != 0)
+		return { error: 'could not start the apply worker' };
+
+	let out = trim(r.stdout || '');
+	let started = time();
+	let rec = { instance: name, state: 'running',
+		pid: match(out, /^[0-9]+$/) ? int(out) : null,
+		started_at: iso_ts(started), started_at_epoch: started,
+		finished_at: null, result: null, error: null };
+	// The worker writes its own 'running' record before it does any work and
+	// cannot have finished yet, so this write cannot clobber a real result.
+	write_apply_status(rec);
+	return { started: true, instance: name, apply: rec };
+}
+
 // Disable the instance: tunnel down and kept down (auto '0'), scheduled
 // rotation stopped, and every managed routing/firewall object released so the
 // steered networks return to normal networking — IPv6 included. The next
@@ -477,4 +645,5 @@ function delete_instance(uci, name) {
 	return { ok: true, deleted: name, interface: iface };
 }
 
-return { set_credentials, clear_credentials, current_peer, restore_peer, write_relay, bring_up, verify_handshake, connect_one, apply, disconnect, create_instance, delete_instance, restore_wan_default };
+return { set_credentials, clear_credentials, current_peer, restore_peer, write_relay, bring_up, verify_handshake, connect_one, apply, disconnect, create_instance, delete_instance, restore_wan_default,
+	write_apply_status, read_apply_status, apply_running, apply_status_report, run_apply, start_apply };

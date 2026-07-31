@@ -1,0 +1,29 @@
+#!/usr/bin/ucode -S
+// SPDX-License-Identifier: MIT
+// One-shot NordVPN apply worker. Spawned detached by the rpcd `apply_start`
+// method and safe to run manually. Applies ONE instance and records the
+// outcome in the apply-status file the LuCI page polls, so an apply that takes
+// tens of seconds never blocks a ubus call.
+
+'use strict';
+
+const _apply = require('nordvpn.apply');
+const _common = require('nordvpn.common');
+const log = _common.log,
+      validate_instance = _common.validate_instance;
+
+// Optional argument: the instance to apply (default 'main').
+let instance = (length(ARGV) > 0 ? validate_instance(ARGV[0]) : null) || 'main';
+let res = _apply.run_apply(instance);
+
+if (res.skipped) {
+	printf('nordvpn-apply: skipped (%s)\n', res.reason);
+	exit(0);
+}
+if (res.state == 'success') {
+	printf('nordvpn-apply: %s connected to %s\n', instance, res.gateway);
+	exit(0);
+}
+
+log('apply failed: ' + (res.error || 'unknown error'));
+exit(1);

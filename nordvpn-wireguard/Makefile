@@ -70,6 +70,7 @@ define Package/nordvpn-wireguard/install
 	$(INSTALL_DATA) ./files/usr/share/rpcd/ucode/nordvpn.uc $(1)/usr/share/rpcd/ucode/nordvpn.uc
 
 	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) ./files/usr/bin/nordvpn-apply $(1)/usr/bin/nordvpn-apply
 	$(INSTALL_BIN) ./files/usr/bin/nordvpn-cache-update $(1)/usr/bin/nordvpn-cache-update
 	$(INSTALL_BIN) ./files/usr/bin/nordvpn-rotate $(1)/usr/bin/nordvpn-rotate
 	$(INSTALL_BIN) ./files/usr/bin/nordvpn-service $(1)/usr/bin/nordvpn-service

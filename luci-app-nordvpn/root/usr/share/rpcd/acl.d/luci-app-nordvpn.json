@@ -3,13 +3,13 @@
 		"description": "Grant access to NordVPN status, configuration and control",
 		"read": {
 			"ubus": {
-				"nordvpn": [ "status", "instances", "locations", "servers", "refresh_status", "external_ip" ]
+				"nordvpn": [ "status", "instances", "locations", "servers", "refresh_status", "apply_status", "external_ip" ]
 			},
 			"uci": [ "nordvpn" ]
 		},
 		"write": {
 			"ubus": {
-				"nordvpn": [ "set_credentials", "clear_credentials", "apply", "disconnect", "refresh_locations", "rotate_now", "create_instance", "delete_instance" ]
+				"nordvpn": [ "set_credentials", "clear_credentials", "apply", "apply_start", "disconnect", "refresh_locations", "rotate_now", "create_instance", "delete_instance" ]
 			},
 			"uci": [ "nordvpn" ]
 		}

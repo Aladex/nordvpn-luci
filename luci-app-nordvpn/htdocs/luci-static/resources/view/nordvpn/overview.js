@@ -1563,10 +1563,17 @@ return view.extend({
 			g.rows.push(r);
 		}, this));
 		groups.forEach(L.bind(function(g) {
+			// Numeric-aware tiebreak on purpose: a plain string compare puts
+			// de#1027 before de#95, which reads as broken when a whole page of
+			// servers shares the same load — and at low load that is most of
+			// them.
 			g.rows.sort(function(a, b) {
 				var al = typeof a.load === 'number' ? a.load : 999;
 				var bl = typeof b.load === 'number' ? b.load : 999;
-				return al - bl;
+				if (al !== bl)
+					return al - bl;
+				return (a.name || a.hostname || '').localeCompare(
+					b.name || b.hostname || '', undefined, { numeric: true });
 			});
 			el.appendChild(E('div', { class: 'nv-srv-grp' }, (g.flag ? g.flag + ' ' : '') +
 				'%s (%d)'.format(g.name, g.rows.length)));

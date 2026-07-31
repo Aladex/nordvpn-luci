@@ -16,6 +16,22 @@ var callLocations = rpc.declare({ object: 'nordvpn', method: 'locations' });
 var callServers = rpc.declare({ object: 'nordvpn', method: 'servers', params: [ 'locations', 'hop_mode' ] });
 var callRefreshStatus = rpc.declare({ object: 'nordvpn', method: 'refresh_status' });
 var callSetCredentials = rpc.declare({ object: 'nordvpn', method: 'set_credentials', params: [ 'token', 'instance' ] });
+// LuCI's uci.apply() arms a rollback (10s by default) and confirms it from a
+// timer the returned promise does not wait for. We go on to call `apply`,
+// which verifies a WireGuard handshake per candidate server at verify_timeout
+// (8s) each — two silent candidates already exceed the window. rpcd is busy
+// serving that call, the confirmation never lands, and the router restores the
+// snapshot: the settings just saved are silently discarded while the routing
+// objects the backend committed stay in place. Observed on the sibling
+// protonvpn app, whose apply is slower and hit it every time.
+//
+// The protection was illusory anyway: what can lock an admin out is the
+// routing and firewall state, which the backend commits itself, outside this
+// transaction — rolling the settings file back would not restore access.
+var callUciApply = rpc.declare({
+	object: 'uci', method: 'apply', params: [ 'timeout', 'rollback' ]
+});
+
 var callApply = rpc.declare({ object: 'nordvpn', method: 'apply', params: [ 'instance' ] });
 var callRefreshLocations = rpc.declare({ object: 'nordvpn', method: 'refresh_locations' });
 var callRotateNow = rpc.declare({ object: 'nordvpn', method: 'rotate_now', params: [ 'instance' ] });
@@ -1737,7 +1753,7 @@ return view.extend({
 		var p = this.notice(_('Saving configuration…'), 'info');
 
 		return uci.save()
-			.then(function() { return uci.apply(); })
+			.then(function() { return callUciApply(0, false); })
 			.then(L.bind(function() {
 				this.dirty = false;
 				this.clearChangeIndicator();

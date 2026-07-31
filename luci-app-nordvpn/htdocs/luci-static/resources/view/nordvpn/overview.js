@@ -32,7 +32,14 @@ var callUciApply = rpc.declare({
 	object: 'uci', method: 'apply', params: [ 'timeout', 'rollback' ]
 });
 
-var callApply = rpc.declare({ object: 'nordvpn', method: 'apply', params: [ 'instance' ] });
+// An apply rewrites the peer and then waits for a real WireGuard handshake per
+// candidate server — verify_timeout (8 s by default) each, up to four
+// candidates. Called synchronously it holds the single rpcd worker for that
+// whole time, so every other LuCI page on the router stalls behind it. The page
+// therefore starts the job and watches it; the synchronous `apply` stays in the
+// backend for the CLI only.
+var callApplyStart = rpc.declare({ object: 'nordvpn', method: 'apply_start', params: [ 'instance' ] });
+var callApplyStatus = rpc.declare({ object: 'nordvpn', method: 'apply_status' });
 var callRefreshLocations = rpc.declare({ object: 'nordvpn', method: 'refresh_locations' });
 var callRotateNow = rpc.declare({ object: 'nordvpn', method: 'rotate_now', params: [ 'instance' ] });
 var callExternalIp = rpc.declare({ object: 'nordvpn', method: 'external_ip', params: [ 'instance' ] });
@@ -40,6 +47,23 @@ var callDisconnect = rpc.declare({ object: 'nordvpn', method: 'disconnect', para
 var callClearCredentials = rpc.declare({ object: 'nordvpn', method: 'clear_credentials', params: [ 'instance' ] });
 var callCreateInstance = rpc.declare({ object: 'nordvpn', method: 'create_instance', params: [ 'instance' ] });
 var callDeleteInstance = rpc.declare({ object: 'nordvpn', method: 'delete_instance', params: [ 'instance' ] });
+
+// Cadence of the apply watcher. The whole point of the asynchronous apply is to
+// leave rpcd free, so the probe must stay rare compared to the work it watches;
+// two seconds still shows the outcome as soon as it lands.
+var APPLY_POLL_MS = 2000;
+// Hard ceiling for that watch, derived from the backend's own worst case rather
+// than picked round: apply_inner tries at most four candidates (the loop clamps
+// `tries` to 4) and each one waits verify_timeout for a handshake, clamped to
+// MAX_VERIFY_TIMEOUT = 30 s — 120 s of pure waiting. On top of that every
+// candidate rewrites the peer and restarts the interface, and the failure path
+// restores the previous peer and brings it up again, so allow the same again
+// for that overhead. Anything past four minutes is a wedged job, not a slow
+// one — say so instead of spinning forever.
+var APPLY_TIMEOUT_MS = 240000;
+// Cadence of the background status poll, kept in a constant because the apply
+// watcher has to take that poller off the queue and put it back.
+var STATUS_POLL_S = 5;
 
 var STYLE = '' +
 	'.nv-status-main{display:flex;flex-wrap:wrap;align-items:baseline;gap:.75em;font-size:1.05em}' +
@@ -151,7 +175,11 @@ return view.extend({
 			this.buildActions()
 		]);
 
-		poll.add(L.bind(this.refreshStatus, this), 5);
+		// The bound function is kept in a field because poll.remove() matches on
+		// identity, and an apply takes this poller off the queue for its duration.
+		this._applyRuns = 0;
+		this._statusPoll = L.bind(this.refreshStatus, this);
+		poll.add(this._statusPoll, STATUS_POLL_S);
 		return container;
 	},
 
@@ -485,9 +513,91 @@ return view.extend({
 		}, this)).catch(function() {});
 	},
 
+	// The background status poll is suspended while an apply runs: two pollers
+	// compete for the one rpcd worker the apply itself needs, and a band
+	// repainted from half-applied state contradicts the "Reconnecting…" banner
+	// still on screen. Both apply call sites refresh once on their own when they
+	// end. Counted, because a second apply may be started from another button
+	// before the first watcher has resolved.
+	pauseStatusPoll: function() {
+		this._applyRuns = (this._applyRuns || 0) + 1;
+		if (this._applyRuns === 1 && this._statusPoll)
+			poll.remove(this._statusPoll);
+	},
+
+	resumeStatusPoll: function() {
+		this._applyRuns = Math.max(0, (this._applyRuns || 0) - 1);
+		if (this._applyRuns === 0 && this._statusPoll)
+			poll.add(this._statusPoll, STATUS_POLL_S);
+	},
+
+	// Starts an apply and resolves with the very object the old synchronous
+	// `apply` returned, so every call site keeps its result handling unchanged.
+	// Never rejects on a backend-reported failure — only on a watcher that cannot
+	// reach the router at all.
+	applyAsync: function(instance) {
+		var deadline = Date.now() + APPLY_TIMEOUT_MS;
+		this.pauseStatusPoll();
+		return callApplyStart(instance).then(L.bind(function(res) {
+			if (!res || !res.error)
+				return this.waitForApply(deadline);
+			// A refused start is usually "one is already running" — from the other
+			// button, another tab, or a rotation. Matching on the message would be
+			// brittle, so simply ask what the job queue is doing: if something is
+			// running, that is the apply the user wanted anyway.
+			return callApplyStatus().then(L.bind(function(st) {
+				return (st && st.state === 'running')
+					? this.waitForApply(deadline) : { error: res.error };
+			}, this), function() { return { error: res.error }; });
+		}, this)).then(L.bind(function(result) {
+			this.resumeStatusPoll();
+			return result;
+		}, this), L.bind(function(e) {
+			// The banner is the caller's to dismiss, but the poll must come back
+			// no matter how this ended, or the page goes permanently static.
+			this.resumeStatusPoll();
+			throw e;
+		}, this));
+	},
+
+	// Probes apply_status until the job leaves 'running'. Anything that is not a
+	// finished job is turned into an `error` result rather than an optimistic
+	// success: a banner claiming a tunnel that never came up is worse than an
+	// honest "no idea".
+	waitForApply: function(deadline) {
+		return new Promise(function(resolve, reject) {
+			var probe = function() {
+				callApplyStatus().then(function(st) {
+					var state = st && st.state;
+					if (state === 'done' || state === 'failed')
+						return resolve((st && st.result) ||
+							{ error: _('the apply finished without reporting a result') });
+					if (state !== 'running')
+						// 'idle' after a successful start means the job record is
+						// gone — an rpcd restart, or the backend died mid-apply.
+						return resolve({ error: _('the apply stopped reporting progress') });
+					if (Date.now() >= deadline)
+						return resolve({ error: _('the apply is still running after %d seconds — check the system log')
+							.format(Math.round(APPLY_TIMEOUT_MS / 1000)) });
+					window.setTimeout(probe, APPLY_POLL_MS);
+				}, function(e) {
+					// One lost probe is not a failed apply: rpcd may just be busy
+					// with the apply itself. Keep trying until the deadline, then
+					// reject so the call site's catch reports the real transport
+					// error instead of inventing an outcome.
+					if (Date.now() >= deadline)
+						return reject(e);
+					window.setTimeout(probe, APPLY_POLL_MS);
+				});
+			};
+			// The start call already returned; nothing can be finished yet.
+			window.setTimeout(probe, APPLY_POLL_MS);
+		});
+	},
+
 	reconnect: function() {
 		var n = this.notice(_('Reconnecting…'), 'info');
-		return callApply(this.instance).then(L.bind(function(res) {
+		return this.applyAsync(this.instance).then(L.bind(function(res) {
 			this.dismiss(n);
 			if (res && res.error)
 				this.notice(_('Reconnect failed: %s').format(res.error), 'error');
@@ -1759,7 +1869,7 @@ return view.extend({
 				this.clearChangeIndicator();
 				this.dismiss(p);
 				p = this.notice(_('Applying and reconnecting…'), 'info');
-				return callApply(this.instance);
+				return this.applyAsync(this.instance);
 			}, this))
 			.then(L.bind(function(res) {
 				this.dismiss(p);

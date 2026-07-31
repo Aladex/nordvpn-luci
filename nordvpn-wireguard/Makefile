@@ -4,7 +4,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=nordvpn-wireguard
-PKG_VERSION:=1.4.2
+PKG_VERSION:=1.4.3
 PKG_RELEASE:=1
 PKG_MAINTAINER:=Andrey Aleksandrov <aladex@gmail.com>
 PKG_LICENSE:=MIT

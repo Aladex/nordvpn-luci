@@ -1,0 +1,37 @@
+Package: luci-app-nordvpn
+Version: 1.5.0-r1
+Depends: libc, luci-base, nordvpn-wireguard
+Source: feeds/luci/applications/luci-app-nordvpn
+SourceName: luci-app-nordvpn
+License: MIT
+Section: luci
+SourceDateEpoch: 1784877710
+URL: https://github.com/openwrt/luci
+Maintainer: OpenWrt LuCI community
+Architecture: all
+Installed-Size: 71680
+Filename: luci-app-nordvpn_1.5.0-r1_all.ipk
+Size: 17339
+SHA256sum: a31110900f6ec47b0df4d98e227f7b4e9c01310f5f60941d2695f7457389495d
+Description:  Web interface for the NordVPN WireGuard backend (nordvpn-wireguard): runtime status, one-time credential setup, server selection, automatic rotation and cache management. Unofficial; not affiliated with Nord Security.
+
+Package: nordvpn-wireguard
+Version: 1.5.0-r1
+Depends: libc, ca-bundle, curl, kmod-wireguard, rpcd, rpcd-mod-ucode, ucode, ucode-mod-fs, ucode-mod-math, ucode-mod-ubus, ucode-mod-uci, ucode-mod-uloop, wireguard-tools
+Source: feeds/base/nordvpn-wireguard
+SourceName: nordvpn-wireguard
+License: MIT
+Section: net
+SourceDateEpoch: 1784877710
+URL: https://github.com/Aladex/nordvpn-luci
+Maintainer: Andrey Aleksandrov <aladex@gmail.com>
+Architecture: all
+Installed-Size: 153600
+Filename: nordvpn-wireguard_1.5.0-r1_all.ipk
+Size: 40176
+SHA256sum: 57384b52ea1e56222087301f9aae0aab8ebbd7c649ec2a94bb3956d37d155940
+Description:  NordVPN WireGuard service for OpenWrt: credential exchange, server-list cache,
+ WireGuard interface/peer generation, connectivity verification, scheduled
+ server rotation and runtime status. Usable from the CLI and ubus without LuCI.
+ Unofficial; not affiliated with or endorsed by Nord Security.
+

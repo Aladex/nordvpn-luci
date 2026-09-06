@@ -183,5 +183,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           find dist -name '*.apk'
+          # The annotated tag body is the release notes. Read it from the
+          # API: the checkout above is shallow and has no tag object, so
+          # --notes-from-tag would silently fall back to the commit message.
+          obj=$(gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/$GITHUB_REF_NAME" \
+            --jq '.object.sha + " " + .object.type')
+          sha=${obj%% *}
+          if [ "${obj##* }" != "tag" ]; then
+            echo "::error::$GITHUB_REF_NAME is a lightweight tag. Re-create it annotated (git tag -a $GITHUB_REF_NAME -m ...) and push it before releasing." >&2
+            exit 1
+          fi
+          # Drop the annotation's first line (GitHub already shows it as the
+          # release title) and the blank lines that leaves at the top.
+          gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha" --jq .message | tail -n +2 | sed '/./,$!d' > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "::error::$GITHUB_REF_NAME has an empty annotation body; write the release notes into the tag message." >&2
+            exit 1
+          fi
           gh release create "$GITHUB_REF_NAME" $(find dist -name '*.apk') \
-            --title "$GITHUB_REF_NAME" --notes-from-tag --verify-tag
+            --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag

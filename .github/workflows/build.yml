@@ -184,4 +184,4 @@ jobs:
         run: |
           find dist -name '*.apk'
           gh release create "$GITHUB_REF_NAME" $(find dist -name '*.apk') \
-            --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
+            --title "$GITHUB_REF_NAME" --notes-from-tag --verify-tag

@@ -455,6 +455,97 @@ write_cache(cache, cpath);
 	eq('routing: manual scheme untouched', sprintf('%J', global.MOCK_UCI), before);
 	eq('routing: manual reports no changes', res.changed_network || res.changed_firewall, false);
 
+	// A section stamped by a SIBLING application is machine-generated, not
+	// hand-written: any `*_managed='1'` option marks it, so it must not force
+	// manual mode. Live-router case: a protonvpn bypass route referencing the
+	// default `nordvpn` interface of instance `main`.
+	global.MOCK_UCI = { network: mknet(), firewall: mkfw() };
+	global.MOCK_UCI.network.sibling = { '.type': 'route', interface: 'nordvpn',
+		target: '10.5.0.0/16', table: 'guest',
+		protonvpn_managed: '1', protonvpn_role: 'steer_local', protonvpn_iface: 'protonvpn' };
+	uci = cursor();
+	let sib = detect_routing(uci, mks({}), false);
+	eq('routing: foreign-managed route is not manual', sib.mode, 'none');
+	eq('routing: foreign-managed route not counted', sib.user_routes, 0);
+
+	// Same for a foreign-managed route living in the instance's own table
+	// while steering is off: still not a user scheme.
+	global.MOCK_UCI = { network: mknet(), firewall: mkfw() };
+	global.MOCK_UCI.network.sibling = { '.type': 'route', interface: 'lan',
+		target: '10.5.0.0/16', table: 'vpn',
+		protonvpn_managed: '1', protonvpn_role: 'steer_local', protonvpn_iface: 'protonvpn' };
+	uci = cursor();
+	sib = detect_routing(uci, mks({ routing_table: 'vpn' }), false);
+	eq('routing: foreign-managed table route is not manual', sib.mode, 'none');
+	eq('routing: foreign-managed table route not counted', sib.user_routes, 0);
+
+	// A LONE `*_managed` option is not a stamp: real stamps come as a family
+	// (`X_managed` + `X_role` + `X_iface`). A hand-written route carrying an
+	// unrelated annotation like `qos_managed='1'` (no `qos_role`) is still a
+	// user route and must force manual mode.
+	global.MOCK_UCI = { network: mknet(), firewall: mkfw() };
+	global.MOCK_UCI.network.qosroute = { '.type': 'route', interface: 'nordvpn',
+		target: '0.0.0.0/0', qos_managed: '1' };
+	uci = cursor();
+	let lone = detect_routing(uci, mks({ auto_routing: true }), false);
+	eq('routing: lone foreign _managed option stays manual', lone.mode, 'manual');
+	eq('routing: lone foreign _managed option still counted', lone.user_routes, 1);
+
+	// The family rule is generic, not a protonvpn exception: another complete
+	// family (mullvad_*) must be skipped too.
+	global.MOCK_UCI = { network: mknet(), firewall: mkfw() };
+	global.MOCK_UCI.network.mvroute = { '.type': 'route', interface: 'nordvpn',
+		target: '10.5.0.0/16',
+		mullvad_managed: '1', mullvad_role: 'bypass', mullvad_iface: 'mullvad' };
+	uci = cursor();
+	let mv = detect_routing(uci, mks({ auto_routing: true }), false);
+	eq('routing: other complete stamp family is not manual', mv.mode, 'auto');
+	eq('routing: other complete stamp family not counted', mv.user_routes, 0);
+
+	// The family must share ONE prefix: `qos_managed` plus `audit_role` /
+	// `audit_iface` is not a stamp — the route is hand-written, so manual.
+	global.MOCK_UCI = { network: mknet(), firewall: mkfw() };
+	global.MOCK_UCI.network.mixed = { '.type': 'route', interface: 'nordvpn',
+		target: '0.0.0.0/0',
+		qos_managed: '1', audit_role: 'x', audit_iface: 'y' };
+	uci = cursor();
+	let mixed = detect_routing(uci, mks({ auto_routing: true }), false);
+	eq('routing: mixed-prefix options stay manual', mixed.mode, 'manual');
+	eq('routing: mixed-prefix options still counted', mixed.user_routes, 1);
+
+	// The family must be COMPLETE: `qos_managed` + `qos_role` without
+	// `qos_iface` is not a stamp either — still a user route, still manual.
+	global.MOCK_UCI = { network: mknet(), firewall: mkfw() };
+	global.MOCK_UCI.network.half = { '.type': 'route', interface: 'nordvpn',
+		target: '0.0.0.0/0',
+		qos_managed: '1', qos_role: 'bulk' };
+	uci = cursor();
+	let half = detect_routing(uci, mks({ auto_routing: true }), false);
+	eq('routing: incomplete stamp family stays manual', half.mode, 'manual');
+	eq('routing: incomplete stamp family still counted', half.user_routes, 1);
+
+	// Each companion must match the prefix INDEPENDENTLY: a same-prefix
+	// `qos_role` with a foreign `audit_iface` is not a stamp — still manual.
+	global.MOCK_UCI = { network: mknet(), firewall: mkfw() };
+	global.MOCK_UCI.network.xiface = { '.type': 'route', interface: 'nordvpn',
+		target: '0.0.0.0/0',
+		qos_managed: '1', qos_role: 'bulk', audit_iface: 'wan' };
+	uci = cursor();
+	let xiface = detect_routing(uci, mks({ auto_routing: true }), false);
+	eq('routing: foreign-prefix _iface stays manual', xiface.mode, 'manual');
+	eq('routing: foreign-prefix _iface still counted', xiface.user_routes, 1);
+
+	// Symmetric case: a same-prefix `qos_iface` with a foreign `audit_role`
+	// is not a stamp either — still a user route, still manual.
+	global.MOCK_UCI = { network: mknet(), firewall: mkfw() };
+	global.MOCK_UCI.network.xrole = { '.type': 'route', interface: 'nordvpn',
+		target: '0.0.0.0/0',
+		qos_managed: '1', audit_role: 'x', qos_iface: 'wan' };
+	uci = cursor();
+	let xrole = detect_routing(uci, mks({ auto_routing: true }), false);
+	eq('routing: foreign-prefix _role stays manual', xrole.mode, 'manual');
+	eq('routing: foreign-prefix _role still counted', xrole.user_routes, 1);
+
 	// Fresh install with automatic routing: zone, forwarding, default route,
 	// kill switch and IPv6 block appear; everything stamped.
 	global.MOCK_UCI = { network: mknet(), firewall: mkfw() };

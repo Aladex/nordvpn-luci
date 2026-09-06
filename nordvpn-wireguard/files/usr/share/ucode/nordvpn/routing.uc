@@ -90,12 +90,21 @@ function find_lan_zone(uci) {
 	return named || holding;
 }
 
-// User (unstamped) static routes/rules referencing the interface or its table.
+// User (hand-written) static routes/rules referencing the interface or its
+// table. A section is machine-generated only when it carries a complete stamp
+// family under one prefix: `X_managed` equal to '1' AND the companions
+// `X_role` and `X_iface` (real managing applications always stamp all three).
+// A lone `X_managed`, a partial family, or mixed prefixes are not a stamp.
 function count_user_routes(uci, iface, table) {
 	let n = 0;
 	let check = function(sec) {
-		if (sec[MARK] == '1')
-			return;
+		for (let k in keys(sec)) {
+			let m = match(k, /^(.+)_managed$/);
+			if (m && sec[k] == '1' &&
+			    sec[m[1] + '_role'] != null &&
+			    sec[m[1] + '_iface'] != null)
+				return;
+		}
 		if (sec.interface == iface)
 			n++;
 		else if (table && table != '' && sec.table == table)
